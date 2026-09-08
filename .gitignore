@@ -1,0 +1,13 @@
+# Python environment
+.venv/
+
+# Python bytecode/cache
+__pycache__/
+*.pyc
+
+# Test artifacts
+.pytest_cache/
+
+# Secrets — never commit actual values, only .env.example
+.env
+tests/.env
