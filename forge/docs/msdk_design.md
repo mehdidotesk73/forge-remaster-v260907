@@ -78,7 +78,8 @@ forge/msdk/
                           # ManifestLinkDef, ManifestFieldDef, type vocabulary
   msdk_core/
     __init__.py           # internal/runtime-facing surface (fuller than msdk/)
-    types.py               # ManifestType and subclasses, STRING/INT/.../LIST
+    types.py               # ManifestType and subclasses, STRING/INT/.../LIST,
+                            # type_to_source() for codegen round-tripping
     defs.py                 # ManifestFieldDef/ManifestObjectDef/ManifestLinkDef,
                              # DeclarationCollector/bind_collector
     base.py                  # ManifestField, ManifestObject, ManifestObjectSet,
@@ -89,8 +90,16 @@ forge/msdk/
     discovery.py            # discover_declarations — scans a folder, collects
                              # + validates ManifestObjectDef/ManifestLinkDef
     links.py                 # infer_join_kind / resolve_link_join_kinds
-    codegen.py                # (not yet built) emits generated .py source
-    builder.py                 # (not yet built) build_msdk orchestrator
+    codegen.py                # generate_module_source / generate_build_init_source
+                               # — emits generated .py source + _build/__init__.py
+    builder.py                 # build_msdk_within_session (core, session-scoped,
+                                # no commit/rollback) / build_msdk (self-contained
+                                # wrapper: opens session, commits or rolls back,
+                                # always closes)
+    spinup.py                   # spinup_manifest_repo — scaffolds a new
+                                 # declarations repo at a local directory
+    env_init.py                  # init_environment — uv venv / compile / install
+                                  # for a spun-up repo's own isolated environment
 ```
 
 **Import layering (three tiers, deliberate):**
@@ -219,12 +228,23 @@ run — it must be cleared at the start of every build (and between tests;
 see §5) since it does not track database state at all, only "have I built
 this Python class in this process."
 
-**`ensure_registered`** enforces four conditions on every call:
+**`ensure_registered`** enforces three conditions once a registry row exists:
 
-1. A row exists in the DB registry.
-2. A class exists in the in-memory cache.
-3. The registry row's referenced tables actually exist in the database.
-4. The registry row's tables match the tables passed to this call.
+1. The registry row's referenced tables actually exist in the database.
+2. The registry row's tables match the tables passed to this call.
+3. The registry row's recorded schema matches the freshly-built schema
+   (raises `SchemaConflictError` on mismatch).
+
+A fourth condition — "a class must already exist in `_registered_classes`
+whenever a registry row exists" — was tried and removed. It's wrong for the
+single most common real case: the _first_ call in a fresh process against
+an _already-registered_ object (a normal second build, run later, in a new
+process) legitimately has no cached class yet — `_registered_classes`
+starts empty every process, by design. Treating that as an error would
+make every real rebuild fail on its very first `ensure_registered` call.
+The one case worth still catching — a class cached under this name with
+_no_ matching registry row at all, meaning two different `api_name`s are
+colliding on one table name within a process — remains a hard error.
 
 On a genuine clean slate (no row, no cached class), it creates the edits
 table, the materialized view, a unique index, and the registry row — all
@@ -242,6 +262,55 @@ database, likely delete the offending `ObjectRegistry` row, and rebuild.
 `ensure_registry_table` bootstraps the registry table itself and must be
 called once, before any `ensure_registered` calls, against a fresh
 database.
+
+### 4.5 `spinup.py` / `env_init.py` — scaffolding a standalone declarations repo
+
+**`spinup_manifest_repo(target_dir)`** creates a new manifest repo where
+`target_dir` **is** both the git repo root and the importable Python
+package — `pyproject.toml`, `README.md`, `__init__.py`, `src/declarations/`,
+and `_build/` all live directly inside it, flat, with no extra nesting.
+This means `target_dir`'s own folder name must be a valid Python
+identifier (no hyphens), since it doubles as the package name a consumer
+will `import`. For **local-directory** spinup specifically, an invalid
+name is auto-corrected (hyphens → underscores, lowercased) rather than
+rejected — the function creates the scaffold at a sibling, corrected path
+and returns that actual path, which callers must use rather than assuming
+it matches their input string. This auto-correction is intentionally
+local-only: a future git-clone-based spinup path must take a cloned
+repo's folder name as authoritative and raise instead of silently
+renaming it, since a git repo's name isn't something spinup can rewrite.
+
+`_build/` (underscore, not a literal dot) is the generated output
+directory — named with a leading underscore specifically so it's both a
+valid importable Python package name and carries the "internal, don't
+touch" convention. The root `__init__.py` re-exports everything from
+`_build/`, so a consumer always writes `from my_manifest_repo import
+Product`, never anything referencing `_build` directly — codegen's
+`generate_build_init_source` (see §4.1 note above, and `codegen.py`)
+produces `_build/__init__.py`'s `__all__`/import lines on every build,
+kept in sync with whatever objects were actually declared.
+
+**`init_environment(repo_dir)`** sets up an isolated environment for a
+spun-up repo using `uv` (a standalone binary, not a Python package):
+`uv venv` creates the venv, `uv pip compile pyproject.toml -o
+requirements-lock.txt` resolves the repo's declared (range-based)
+dependencies into an exact, reproducible lock file, `uv pip install -r
+requirements-lock.txt` installs from that lock file. This mirrors the
+same declare-loosely/pin-exactly split used everywhere else in this
+system (Forge's own dependencies, generated repos' dependencies on
+`forge-msdk`) — `pyproject.toml` is human-facing and never installed
+from directly; `requirements-lock.txt` is the machine-generated,
+reproducible artifact that installation actually reads. This function is
+layer-agnostic (no Manifest-specific logic) and is intended to be reused
+as-is for Terminal/Aperture repo spinup later.
+
+`init_environment` genuinely requires `forge-msdk` to be a real,
+resolvable git dependency to succeed — it will fail correctly and
+informatively if Forge's own repo isn't tagged yet, or if the dependency
+URL's subdirectory fragment (if any) doesn't correspond to real packaging
+metadata at that path. Confirm Forge's root `pyproject.toml` actually
+configures package discovery to include `forge` and its subpackages
+before relying on this end-to-end.
 
 ---
 
@@ -312,20 +381,39 @@ VIEW` per test, not just row data.
 
 ## 7. What's not yet built
 
-- **Codegen** (`msdk_build/codegen.py`) — turns a validated
-  `ManifestObjectDef` + resolved `ManifestLink`s into the actual generated
-  `.py` source (`class Product(ManifestObject): ...`, `ProductSet`,
-  `_links = {...}`).
-- **Builder orchestration** (`msdk_build/builder.py`) — ties together
-  `discover_declarations` → `ensure_registry_table` → per-object
-  `ensure_registered` (one shared session, one commit/rollback) → `resolve_link_join_kinds`
-  → codegen → file output.
+Codegen, builder orchestration (including cross-object-atomic
+registration and table-name reuse across rebuilds), and repo spinup are
+now complete and tested against real Postgres — see §4 above. What
+remains:
+
 - **Schema migration** — `ensure_registered` currently treats _any_ schema
-  diff as fatal. A planned safe/unsafe diff classifier (nullable
+  diff (once a registry row already exists) as fatal via
+  `SchemaConflictError`. A planned safe/unsafe diff classifier (nullable
   relaxation and additive nullable fields auto-apply; type changes, field
   removal, and nullable tightening require explicit migration) is designed
   but not implemented.
-- **Table-name/rid resolution helper** (`_resolve_table_names`) — reuses
-  existing names from the registry on a re-build, generates fresh ones only
-  for a genuinely new `api_name`. Designed, not yet written into
-  `builder.py`.
+- **Git-backed spinup/build/publish** — `spinup_manifest_repo`/
+  `build_msdk_within_session`/`init_environment` all operate on plain
+  local filesystem paths only, by design (see §6). The git layer around
+  them — clone-to-temp, build, commit, tag, push — is designed
+  conceptually (clone/commit/push wrapper functions, version-tag-per-build)
+  but not yet implemented.
+- **Forge API service** — an HTTP layer exposing spinup/build/publish as
+  endpoints (so a caller can trigger these without direct Python function
+  calls) is planned but not started. Deliberately sequenced _after_ the
+  git-backed layer above, so the API has the complete functionality to
+  expose rather than only the local-directory subset.
+- **`_properties`/`_nullable_map`/`_pk_field` redundancy with
+  `ManifestField` declarations** — codegen currently emits this
+  information twice (once via `ManifestFieldDef` in `_fields_X`, once via
+  these class attributes). A cleaner design would derive them from the
+  `ManifestField` descriptors themselves at class-creation time (e.g. via
+  `__init_subclass__`), collapsing the redundancy. Deliberately postponed
+  until the full spinup → declare → build → import → git pipeline is
+  proven end-to-end, so this refactor has a working test suite as a
+  safety net rather than being done mid-pipeline.
+- **Terminal and Aperture layers** — not started. The same
+  spinup/build/publish pattern (directory-level build, git-level publish,
+  `pyproject.toml` + lock file dependency management via `uv`) is intended
+  to generalize directly to both, per design discussion, but no code
+  exists yet for either.

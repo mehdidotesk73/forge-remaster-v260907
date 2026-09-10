@@ -161,14 +161,16 @@ def ensure_registered(
         return edit_cls, materialized_cls, True
 
     if existing is None:
+        # in_mem_exists is True here — a class is cached under this table name in
+        # this process, but no registry row exists for it. Real inconsistency:
+        # likely two different api_names colliding on the same table name.
         raise RuntimeError(
             f"{api_name}: in-memory class exists but no registry row found."
         )
-    if not in_mem_exists:
-        raise RuntimeError(
-            f"{api_name}: registry row exists but no in-memory class found."
-        )
 
+    # existing is not None — normal case whether this is the first call in this
+    # process (in_mem_exists was False, class just built fresh above) or a
+    # repeat call (in_mem_exists was True, cached class returned).
     inspector = inspect(session.connection())
     if not (
         inspector.has_table(existing.edits_table)

@@ -1,3 +1,4 @@
+# msdk_core/types.py
 from __future__ import annotations
 from sqlalchemy import String, Integer, Float, Boolean, DateTime, ARRAY
 
@@ -8,8 +9,17 @@ class ManifestType:
     def is_array(self) -> bool:
         return False
 
-    def element_type(self) -> "ManifestType | None":
+    def element_type(self):
         return None
+
+    def _to_source(self) -> str:
+        """Returns Python source text that reconstructs this type, assuming
+        the standard type-name imports are in scope. Private — used only by
+        codegen, never part of the runtime type interface."""
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not define _to_source() — "
+            f"needed for codegen to reconstruct this type in generated source"
+        )
 
     def __eq__(self, other):
         return isinstance(other, self.__class__)
@@ -24,21 +34,36 @@ class ManifestType:
 class StringType(ManifestType):
     sql_type = String()
 
+    def _to_source(self) -> str:
+        return "STRING"
+
 
 class IntType(ManifestType):
     sql_type = Integer()
+
+    def _to_source(self) -> str:
+        return "INT"
 
 
 class FloatType(ManifestType):
     sql_type = Float()
 
+    def _to_source(self) -> str:
+        return "FLOAT"
+
 
 class BoolType(ManifestType):
     sql_type = Boolean()
 
+    def _to_source(self) -> str:
+        return "BOOL"
+
 
 class DateTimeType(ManifestType):
     sql_type = DateTime()
+
+    def _to_source(self) -> str:
+        return "DATETIME"
 
 
 class ArrayType(ManifestType):
@@ -55,6 +80,9 @@ class ArrayType(ManifestType):
     def sql_type(self):
         return ARRAY(self.element.sql_type)
 
+    def _to_source(self) -> str:
+        return f"LIST[{self.element._to_source()}]"
+
     def __eq__(self, other):
         return isinstance(other, ArrayType) and self.element == other.element
 
@@ -70,10 +98,15 @@ class _ListFactory:
         return ArrayType(element)
 
 
-# Singleton instances — fields reference these directly, no string parsing anywhere
+# Singleton instances — fields reference these directly
 STRING = StringType()
 INT = IntType()
 FLOAT = FloatType()
 BOOL = BoolType()
 DATETIME = DateTimeType()
 LIST = _ListFactory()
+
+
+def type_to_source(t: ManifestType) -> str:
+    """Public codegen entry point — wraps the private per-class _to_source()."""
+    return t._to_source()

@@ -8,7 +8,16 @@ from .base import (
     ManifestLink,
 )
 from .defs import ManifestFieldDef, ManifestObjectDef, ManifestLinkDef
-from .types import STRING, INT, FLOAT, BOOL, DATETIME, LIST, ManifestType
+from .types import (
+    STRING,
+    INT,
+    FLOAT,
+    BOOL,
+    DATETIME,
+    LIST,
+    ManifestType,
+    type_to_source,
+)
 from .registry import (
     Base,
     ObjectRegistry,
@@ -41,4 +50,5 @@ __all__ = [
     "SchemaBuildError",
     "ensure_registered",
     "ensure_registry_table",
+    "type_to_source",
 ]

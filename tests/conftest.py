@@ -30,6 +30,14 @@ TEST_DB_URL = (
 )
 
 
+def reset_registered_classes():
+    for mapped_cls in list(_registered_classes.values()):
+        table_name = mapped_cls.__tablename__
+        if table_name in Base.metadata.tables:
+            Base.metadata.remove(Base.metadata.tables[table_name])
+    _registered_classes.clear()
+
+
 @pytest.fixture(scope="session")
 def engine():
     subprocess.run(
@@ -72,8 +80,4 @@ def db_session(engine):
     transaction.rollback()
     connection.close()
 
-    for mapped_cls in list(_registered_classes.values()):
-        table_name = mapped_cls.__tablename__
-        if table_name in Base.metadata.tables:
-            Base.metadata.remove(Base.metadata.tables[table_name])
-    _registered_classes.clear()
+    reset_registered_classes()
