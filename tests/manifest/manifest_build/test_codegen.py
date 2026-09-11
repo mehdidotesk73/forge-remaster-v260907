@@ -1,12 +1,12 @@
-from forge.msdk.msdk_core import (
+from forge.manifest.manifest_core import (
     ManifestObjectDef,
     ManifestFieldDef,
     ManifestLinkDef,
     current_session,
 )
-from forge.msdk.msdk_core.registry import ensure_registered
-from forge.msdk.msdk_core.types import STRING, INT, LIST
-from forge.msdk.msdk_build.codegen import generate_module_source
+from forge.manifest.manifest_core.registry import ensure_registered
+from forge.manifest.manifest_core.types import STRING, INT, LIST
+from forge.manifest.manifest_build.codegen import generate_module_source
 
 
 def test_generate_and_exec_single_object(db_session):

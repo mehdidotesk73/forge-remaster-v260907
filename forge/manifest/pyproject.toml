@@ -1,6 +1,6 @@
-# forge/msdk/pyproject.toml
+# forge/manifest/pyproject.toml
 [project]
-name = "forge-msdk"
+name = "forge-manifest"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
@@ -14,4 +14,4 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["../.."]
-include = ["forge.msdk", "forge.msdk.*"]
+include = ["forge.manifest", "forge.manifest.*"]

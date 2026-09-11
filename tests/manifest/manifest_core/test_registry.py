@@ -1,12 +1,12 @@
-from forge.msdk.msdk_core.defs import ManifestFieldDef
-from forge.msdk.msdk_core.registry import ensure_registered, ObjectRegistry
-from forge.msdk.msdk_core.base import (
+from forge.manifest.manifest_core.defs import ManifestFieldDef
+from forge.manifest.manifest_core.registry import ensure_registered, ObjectRegistry
+from forge.manifest.manifest_core.base import (
     ManifestObject,
     ManifestObjectSet,
     ManifestField,
     current_session,
 )
-from forge.msdk.msdk_core.types import STRING
+from forge.manifest.manifest_core.types import STRING
 
 
 def _build_widget(session):

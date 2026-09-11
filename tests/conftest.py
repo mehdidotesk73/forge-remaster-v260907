@@ -6,7 +6,11 @@ from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from forge.msdk.msdk_core.registry import Base, ObjectRegistry, _registered_classes
+from forge.manifest.manifest_core.registry import (
+    Base,
+    ObjectRegistry,
+    _registered_classes,
+)
 
 COMPOSE_FILE = "tests/docker-compose.test.yml"
 ENV_FILE = "tests/.env"

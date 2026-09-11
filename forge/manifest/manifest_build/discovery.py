@@ -3,7 +3,7 @@ import importlib.util
 import sys
 from pathlib import Path
 
-from forge.msdk.msdk_core.defs import (
+from forge.manifest.manifest_core.defs import (
     ManifestObjectDef,
     ManifestLinkDef,
     DeclarationCollector,
@@ -16,7 +16,7 @@ class ManifestValidationError(Exception):
 
 
 def _load_module_from_file(py_file: Path):
-    module_name = f"_msdk_declarations_{py_file.stem}"
+    module_name = f"_manifest_declarations_{py_file.stem}"
     spec = importlib.util.spec_from_file_location(module_name, py_file)
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module

@@ -11,3 +11,7 @@ __pycache__/
 # Secrets — never commit actual values, only .env.example
 .env
 tests/.env
+
+# Packaging build artifacts (created by pip/uv install -e, etc.)
+build/
+*.egg-info/

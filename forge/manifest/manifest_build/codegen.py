@@ -1,5 +1,9 @@
 from __future__ import annotations
-from forge.msdk.msdk_core import ManifestObjectDef, ManifestLinkDef, type_to_source
+from forge.manifest.manifest_core import (
+    ManifestObjectDef,
+    ManifestLinkDef,
+    type_to_source,
+)
 from .links import resolve_link_join_kinds
 
 
@@ -122,12 +126,12 @@ def generate_module_source(
     object_defs_by_name = {o.api_name: o for o in object_defs}
 
     header = (
-        "from forge.msdk.msdk_core import (\n"
+        "from forge.manifest.manifest_core import (\n"
         "    ManifestObject, ManifestObjectSet, ManifestField, ManifestLink,\n"
         ")\n"
-        "from forge.msdk.msdk_core.registry import _make_mapped_class\n"
-        "from forge.msdk.msdk_core.defs import ManifestFieldDef\n"
-        "from forge.msdk.msdk_core.types import STRING, INT, FLOAT, BOOL, DATETIME, LIST\n"
+        "from forge.manifest.manifest_core.registry import _make_mapped_class\n"
+        "from forge.manifest.manifest_core.defs import ManifestFieldDef\n"
+        "from forge.manifest.manifest_core.types import STRING, INT, FLOAT, BOOL, DATETIME, LIST\n"
     )
 
     object_blocks = [
