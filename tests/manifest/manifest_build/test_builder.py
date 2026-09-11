@@ -2,8 +2,8 @@ import importlib.util
 import sys
 import pytest
 
-from forge.msdk.msdk_build.builder import build_msdk_within_session
-from forge.msdk.msdk_core.registry import SchemaConflictError
+from forge.manifest.manifest_build.builder import build_msdk_within_session
+from forge.manifest.manifest_core.registry import SchemaConflictError
 from tests.conftest import reset_registered_classes
 
 
@@ -30,7 +30,7 @@ def test_build_msdk_core_end_to_end(tmp_path, db_session):
         declarations_dir,
         "widget.py",
         """
-from forge.msdk import ManifestObjectDef, ManifestFieldDef, STRING
+from forge.manifest import ManifestObjectDef, ManifestFieldDef, STRING
 ManifestObjectDef(
     display_name="BuilderWidget", api_name="BuilderWidget",
     fields={
@@ -61,7 +61,7 @@ def test_build_msdk_core_idempotent_on_second_call(tmp_path, db_session):
         declarations_dir,
         "widget.py",
         """
-from forge.msdk import ManifestObjectDef, ManifestFieldDef, STRING
+from forge.manifest import ManifestObjectDef, ManifestFieldDef, STRING
 ManifestObjectDef(
     display_name="BuilderWidget2", api_name="BuilderWidget2",
     fields={"widget_id": ManifestFieldDef(type=STRING, primary_key=True, nullable=False)},
@@ -87,7 +87,7 @@ def test_build_msdk_core_raises_on_schema_conflict(tmp_path, db_session):
         declarations_dir,
         "widget.py",
         """
-from forge.msdk import ManifestObjectDef, ManifestFieldDef, STRING
+from forge.manifest import ManifestObjectDef, ManifestFieldDef, STRING
 ManifestObjectDef(
     display_name="BuilderWidget3", api_name="BuilderWidget3",
     fields={"widget_id": ManifestFieldDef(type=STRING, primary_key=True, nullable=False)},
@@ -103,7 +103,7 @@ ManifestObjectDef(
         declarations_dir,
         "widget.py",
         """
-from forge.msdk import ManifestObjectDef, ManifestFieldDef, STRING, INT
+from forge.manifest import ManifestObjectDef, ManifestFieldDef, STRING, INT
 ManifestObjectDef(
     display_name="BuilderWidget3", api_name="BuilderWidget3",
     fields={

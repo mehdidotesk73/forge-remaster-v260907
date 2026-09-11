@@ -6,7 +6,7 @@ _PYPROJECT_TEMPLATE = """[project]
 name = "{repo_name}"
 version = "0.0.0"
 dependencies = [
-    "forge-msdk @ git+https://github.com/mehdidotesk73/forge-remaster-v260907.git@v0.1.0#subdirectory=forge/msdk",
+    "forge-manifest @ git+https://github.com/mehdidotesk73/forge-remaster-v260907.git@v0.1.0#subdirectory=forge/manifest",
 ]
 """
 
@@ -18,9 +18,9 @@ Manifest declarations for this project.
 
 Define your objects in `src/declarations/` — one file per object (or per
 related group of objects/links) is the convention. Each file should declare
-ManifestObjectDef/ManifestLinkDef instances using forge.msdk, e.g.:
+ManifestObjectDef/ManifestLinkDef instances using forge.manifest, e.g.:
 
-    from forge.msdk import ManifestObjectDef, ManifestFieldDef, STRING, INT
+    from forge.manifest import ManifestObjectDef, ManifestFieldDef, STRING, INT
 
     ManifestObjectDef(
         display_name="Product", api_name="Product",
@@ -35,7 +35,7 @@ ManifestObjectDef/ManifestLinkDef instances using forge.msdk, e.g.:
 - `_build/` — fully regenerated on every build. Any manual edits here will
   be silently overwritten.
 - The root `__init__.py` — re-exports from `_build/`, managed by spinup.
-- `pyproject.toml`'s `forge-msdk` dependency line — managed by version-bump
+- `pyproject.toml`'s `forge-manifest` dependency line — managed by version-bump
   tooling; feel free to add your own extra dependencies below it.
 
 ## After building
@@ -57,7 +57,7 @@ _STARTER_DECLARATION_TEMPLATE = '''"""
 Example declaration file. Delete or rename this once you have real
 objects — this is just a starting point showing the imports you need.
 """
-from forge.msdk import ManifestObjectDef, ManifestLinkDef, ManifestFieldDef, STRING, INT, LIST
+from forge.manifest import ManifestObjectDef, ManifestLinkDef, ManifestFieldDef, STRING, INT, LIST
 
 # Example:
 #

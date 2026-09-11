@@ -1,5 +1,9 @@
 from __future__ import annotations
-from forge.msdk.msdk_core import ManifestObjectDef, ManifestLinkDef, ManifestType
+from forge.manifest.manifest_core import (
+    ManifestObjectDef,
+    ManifestLinkDef,
+    ManifestType,
+)
 
 
 class LinkResolutionError(Exception):

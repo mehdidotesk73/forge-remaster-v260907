@@ -1,8 +1,8 @@
-# tests/msdk_build/test_discovery.py
+# tests/manifest/manifest_build/test_discovery.py
 import pytest
 from pathlib import Path
 
-from forge.msdk.msdk_build.discovery import (
+from forge.manifest.manifest_build.discovery import (
     discover_declarations,
     ManifestValidationError,
 )
@@ -17,7 +17,7 @@ def test_discovers_objects_and_links(tmp_path):
         tmp_path,
         "product.py",
         """
-from forge.msdk.msdk_core import ManifestObjectDef, ManifestFieldDef
+from forge.manifest.manifest_core import ManifestObjectDef, ManifestFieldDef
 Product = ManifestObjectDef(
     display_name="Product", api_name="Product",
     fields={"product_id": ManifestFieldDef(type="string", primary_key=True, nullable=False)},
@@ -28,7 +28,7 @@ Product = ManifestObjectDef(
         tmp_path,
         "part.py",
         """
-from forge.msdk.msdk_core import ManifestObjectDef, ManifestFieldDef
+from forge.manifest.manifest_core import ManifestObjectDef, ManifestFieldDef
 Part = ManifestObjectDef(
     display_name="Part", api_name="Part",
     fields={"part_id": ManifestFieldDef(type="string", primary_key=True, nullable=False)},
@@ -39,7 +39,7 @@ Part = ManifestObjectDef(
         tmp_path,
         "links.py",
         """
-from forge.msdk.msdk_core import ManifestLinkDef
+from forge.manifest.manifest_core import ManifestLinkDef
 ManifestLinkDef(
     name="parts", reverse_name="products",
     source="Product", source_field="part_ids",
@@ -58,7 +58,7 @@ def test_rejects_missing_primary_key(tmp_path):
         tmp_path,
         "bad.py",
         """
-from forge.msdk.msdk_core import ManifestObjectDef, ManifestFieldDef
+from forge.manifest.manifest_core import ManifestObjectDef, ManifestFieldDef
 Bad = ManifestObjectDef(
     display_name="Bad", api_name="Bad",
     fields={"name": ManifestFieldDef(type="string")},
@@ -76,7 +76,7 @@ def test_rejects_multiple_primary_keys(tmp_path):
         tmp_path,
         "bad.py",
         """
-from forge.msdk.msdk_core import ManifestObjectDef, ManifestFieldDef
+from forge.manifest.manifest_core import ManifestObjectDef, ManifestFieldDef
 Bad = ManifestObjectDef(
     display_name="Bad", api_name="Bad",
     fields={
@@ -97,7 +97,7 @@ def test_rejects_duplicate_api_name(tmp_path):
         tmp_path,
         "a.py",
         """
-from forge.msdk.msdk_core import ManifestObjectDef, ManifestFieldDef
+from forge.manifest.manifest_core import ManifestObjectDef, ManifestFieldDef
 X = ManifestObjectDef(display_name="X", api_name="Dup",
     fields={"id": ManifestFieldDef(type="string", primary_key=True, nullable=False)})
 """,
@@ -106,7 +106,7 @@ X = ManifestObjectDef(display_name="X", api_name="Dup",
         tmp_path,
         "b.py",
         """
-from forge.msdk.msdk_core import ManifestObjectDef, ManifestFieldDef
+from forge.manifest.manifest_core import ManifestObjectDef, ManifestFieldDef
 Y = ManifestObjectDef(display_name="Y", api_name="Dup",
     fields={"id": ManifestFieldDef(type="string", primary_key=True, nullable=False)})
 """,
@@ -120,7 +120,7 @@ def test_rejects_link_to_unknown_object(tmp_path):
         tmp_path,
         "a.py",
         """
-from forge.msdk.msdk_core import ManifestObjectDef, ManifestFieldDef
+from forge.manifest.manifest_core import ManifestObjectDef, ManifestFieldDef
 X = ManifestObjectDef(display_name="X", api_name="X",
     fields={"id": ManifestFieldDef(type="string", primary_key=True, nullable=False)})
 """,
@@ -129,7 +129,7 @@ X = ManifestObjectDef(display_name="X", api_name="X",
         tmp_path,
         "link.py",
         """
-from forge.msdk.msdk_core import ManifestLinkDef
+from forge.manifest.manifest_core import ManifestLinkDef
 ManifestLinkDef(name="l", reverse_name="r", source="X", source_field="y_id",
                  target="Y", target_field="id")
 """,

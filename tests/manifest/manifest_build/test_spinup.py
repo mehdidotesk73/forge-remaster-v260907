@@ -1,5 +1,5 @@
 import pytest
-from forge.msdk.msdk_build.spinup import spinup_manifest_repo
+from forge.manifest.manifest_build.spinup import spinup_manifest_repo
 
 
 def test_spinup_creates_expected_structure(tmp_path):

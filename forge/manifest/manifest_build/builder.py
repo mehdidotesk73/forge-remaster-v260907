@@ -4,7 +4,7 @@ from pathlib import Path
 from sqlalchemy import Engine, inspect
 from sqlalchemy.orm import Session
 
-from forge.msdk.msdk_core.registry import (
+from forge.manifest.manifest_core.registry import (
     ensure_registry_table,
     ensure_registered,
     ObjectRegistry,

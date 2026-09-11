@@ -1,5 +1,5 @@
-from .msdk_core.defs import ManifestFieldDef, ManifestObjectDef, ManifestLinkDef
-from .msdk_core.types import STRING, INT, FLOAT, BOOL, DATETIME, LIST
+from .manifest_core.defs import ManifestFieldDef, ManifestObjectDef, ManifestLinkDef
+from .manifest_core.types import STRING, INT, FLOAT, BOOL, DATETIME, LIST
 
 __all__ = [
     "ManifestFieldDef",
