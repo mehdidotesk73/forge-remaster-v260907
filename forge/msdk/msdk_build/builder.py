@@ -10,7 +10,7 @@ from forge.msdk.msdk_core.registry import (
     ObjectRegistry,
 )
 from .discovery import discover_declarations
-from .codegen import generate_module_source
+from .codegen import generate_module_source, generate_build_init_source
 
 
 def _resolve_table_names(api_name: str, session: Session) -> tuple[str, str, str]:
@@ -49,6 +49,9 @@ def build_msdk_within_session(
     commit-on-success/rollback-on-failure entry point.
     """
     collector = discover_declarations(declarations_dir)
+    print(
+        f"[builder] discovered {len(collector.objects)} objects: {[o.api_name for o in collector.objects]}"
+    )
 
     engine = session.get_bind()
     ensure_registry_table(engine)
@@ -79,6 +82,17 @@ def build_msdk_within_session(
     output_path.mkdir(parents=True, exist_ok=True)
     generated_file = output_path / "_generated.py"
     generated_file.write_text(source)
+    print(f"[builder] wrote {generated_file}")
+
+    print(
+        f"[builder] calling generate_build_init_source with {len(collector.objects)} objects"
+    )
+    init_source = generate_build_init_source(collector.objects)
+    print(f"[builder] init_source content: {init_source!r}")
+
+    init_path = output_path / "__init__.py"
+    init_path.write_text(init_source)
+    print(f"[builder] wrote {init_path}")
 
     return generated_file
 

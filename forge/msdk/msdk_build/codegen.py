@@ -94,6 +94,23 @@ def generate_links_source(
     return "\n\n".join(blocks)
 
 
+def generate_build_init_source(object_defs: list[ManifestObjectDef]) -> str:
+    """
+    Generates the content for _build/__init__.py — re-exports every
+    declared object and its Set class from _generated.py, so a consumer
+    can write `from my_manifest_repo import Product` without ever
+    needing to know _generated.py exists.
+    """
+    names = []
+    for obj_def in object_defs:
+        names.append(obj_def.api_name)
+        names.append(f"{obj_def.api_name}Set")
+
+    import_line = f"from ._generated import {', '.join(names)}"
+    all_line = f"__all__ = {names!r}"
+    return f"{import_line}\n\n{all_line}\n"
+
+
 def generate_module_source(
     object_defs: list[ManifestObjectDef],
     link_defs: list[ManifestLinkDef],
