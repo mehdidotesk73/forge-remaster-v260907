@@ -1,6 +1,7 @@
 from __future__ import annotations
 import uuid
 from pathlib import Path
+import tempfile
 from sqlalchemy import Engine, inspect
 from sqlalchemy.orm import Session
 
@@ -15,6 +16,7 @@ from .codegen import (
     generate_build_init_source,
     generate_registry_json,
 )
+from .git_ops import clone_repo, commit_and_push, tag_repo
 
 
 def _resolve_table_names(api_name: str, session: Session) -> tuple[str, str, str]:
@@ -114,3 +116,26 @@ def build_msdk(declarations_dir: str, output_dir: str, engine: Engine) -> Path:
         with session.begin():
             result = build_msdk_within_session(declarations_dir, output_dir, session)
         return result
+
+
+def git_build_manifest_repo(git_url: str, tag: str, engine: Engine) -> dict:
+    temp_dir = tempfile.mkdtemp(prefix="forge_git_build_")
+    repo_path = clone_repo(git_url, str(Path(temp_dir) / "repo"))
+
+    with Session(engine) as session:
+        with session.begin():
+            generated_file = build_msdk_within_session(
+                str(repo_path / "src" / "declarations"),
+                str(repo_path / "_build"),
+                session,
+            )
+
+    commit_push_result = commit_and_push(str(repo_path))
+    tag_result = tag_repo(str(repo_path), tag)
+
+    return {
+        "repo_path": str(repo_path),
+        "generated_file": str(generated_file),
+        "tag": tag_result["tag"],
+        **commit_push_result,
+    }

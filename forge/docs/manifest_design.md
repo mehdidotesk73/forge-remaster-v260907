@@ -74,52 +74,65 @@ _field access_ is what does existence-checking, and raises `ValueError` if
 the pk doesn't exist anywhere. This is a documented, intentional
 trade-off, not an oversight.
 
-**Confirmed live (this session, via example-harness):** since nothing
-refreshes the materialized view automatically, `Product.where()` will
-show an **empty result even immediately after a successful `create()`**,
-because the view was created (empty) before any rows existed and nothing
-has refreshed it since. This is expected, not a bug — it's the direct,
-observable consequence of the trade-off above. A helper that takes an
-object's rid and manually triggers `REFRESH MATERIALIZED VIEW
-CONCURRENTLY` for it would let tests exercise the bulk-access path
-deliberately; this is a good, small, not-yet-built utility (see §7).
+**Confirmed live (via `e2e-harness`):** since nothing refreshes the
+materialized view automatically, `Product.where()` will show an **empty
+result even immediately after a successful `create()`**, because the view
+was created (empty) before any rows existed and nothing has refreshed it
+since. This is expected, not a bug — it's the direct, observable
+consequence of the trade-off above. A manual materialize/refresh helper is
+still a planned, not-yet-built utility — see §7.
 
 ---
 
 ## 3. Package layout
 
 ```
-forge/manifest/
-  pyproject.toml           # name = "forge-manifest" — independently
-                            # installable package boundary, distinct from
-                            # forge's own root pyproject.toml (see §3.1)
-  __init__.py               # declaration-facing surface: ManifestObjectDef,
-                             # ManifestLinkDef, ManifestFieldDef, type vocabulary
-  manifest_core/
-    __init__.py              # internal/runtime-facing surface (fuller than
-                              # forge.manifest itself)
-    types.py                  # ManifestType and subclasses, STRING/INT/.../LIST,
-                               # type_to_source() for codegen round-tripping
-    defs.py                    # ManifestFieldDef/ManifestObjectDef/ManifestLinkDef,
-                                # DeclarationCollector/bind_collector
-    base.py                     # ManifestField, ManifestObject, ManifestObjectSet,
-                                 # ManifestLink, current_session/_require_session
-    registry.py                  # ObjectRegistry, ensure_registry_table,
-                                  # ensure_registered, _make_mapped_class
-  manifest_build/
-    discovery.py               # discover_declarations — scans a folder, collects
-                                # + validates ManifestObjectDef/ManifestLinkDef
-    links.py                    # infer_join_kind / resolve_link_join_kinds
-    codegen.py                   # generate_module_source / generate_build_init_source
-                                  # — emits generated .py source + _build/__init__.py
-    builder.py                    # build_msdk_within_session (core, session-scoped,
-                                   # no commit/rollback) / build_msdk (self-contained
-                                   # wrapper: opens session, commits or rolls back,
-                                   # always closes)
-    spinup.py                      # spinup_manifest_repo — scaffolds a new
-                                    # declarations repo at a local directory
-    env_init.py                     # init_environment — uv venv / compile / install
-                                     # for a spun-up repo's own isolated environment
+forge/
+  manifest/
+    pyproject.toml           # name = "forge-manifest" — independently
+                              # installable package boundary, distinct from
+                              # forge's own root pyproject.toml (see §3.1)
+    __init__.py                # declaration-facing surface: ManifestObjectDef,
+                                # ManifestLinkDef, ManifestFieldDef, type vocabulary
+    manifest_core/
+      __init__.py               # internal/runtime-facing surface (fuller than
+                                 # forge.manifest itself)
+      types.py                   # ManifestType and subclasses, STRING/INT/.../LIST,
+                                  # type_to_source() for codegen round-tripping
+      defs.py                     # ManifestFieldDef/ManifestObjectDef/ManifestLinkDef,
+                                   # DeclarationCollector/bind_collector
+      base.py                      # ManifestField, ManifestObject, ManifestObjectSet,
+                                    # ManifestLink, current_session/_require_session
+      registry.py                   # ObjectRegistry, ensure_registry_table,
+                                     # ensure_registered, _make_mapped_class
+    manifest_build/
+      discovery.py                 # discover_declarations — scans a folder, collects
+                                    # + validates ManifestObjectDef/ManifestLinkDef
+      links.py                      # infer_join_kind / resolve_link_join_kinds
+      codegen.py                     # generate_module_source / generate_build_init_source /
+                                      # generate_registry_json — emits generated .py source,
+                                      # _build/__init__.py, and _build/registry.json
+      builder.py                      # build_msdk_within_session (core, session-scoped,
+                                       # no commit/rollback) / build_msdk (self-contained
+                                       # wrapper) / git_build_manifest_repo (git-aware,
+                                       # composes git_ops — see §4.6)
+      spinup.py                        # spinup_manifest_repo (local) / git_spinup_manifest_repo
+                                        # (git-aware, composes git_ops — see §4.6)
+      open.py                           # open_manifest_repo (local: venv, deps, Pylance config,
+                                         # VS Code launch) / git_open_manifest_repo (git-aware,
+                                         # reuse-if-present — see §4.6)
+      env_init.py                        # init_environment — uv venv / compile / install
+                                          # for a spun-up repo's own isolated environment
+      git_ops.py                          # _run_git, clone_repo, commit_repo, push_repo,
+                                           # commit_and_push, tag_repo — generic git primitives,
+                                           # imports nothing else in this package (see §4.6)
+  api/
+    main.py                   # FastAPI app, includes each layer's router
+    cli.py                      # forge-api CLI entry point (registered via root
+                                 # pyproject.toml's [project.scripts])
+    routes/
+      manifest.py                # /manifest/* routes — thin wrappers around
+                                  # manifest_build functions, one route per function
 ```
 
 **Import layering (three tiers, deliberate):**
@@ -134,6 +147,16 @@ A declaration file only ever needs the top tier. Nothing in
 `forge.manifest` should ever require the coder to know `manifest_core`
 exists.
 
+**A second, orthogonal layering discipline within `manifest_build`
+itself** (established when `git_ops.py` was added): `git_ops.py` is a
+generic primitive layer with zero knowledge of Manifest, spinup, or
+builds — it only knows about git. `spinup.py`, `builder.py`, and `open.py`
+each import `git_ops` and compose its primitives for their own specific
+purpose (`git_spinup_manifest_repo`, `git_build_manifest_repo`,
+`git_open_manifest_repo`). None of these three import each other. This
+keeps the dependency graph flat and one-directional: `git_ops` ← {spinup,
+builder, open}, never the reverse, and never sideways.
+
 ### 3.1 Two separate `pyproject.toml`s, two separate audiences — a real gotcha found this session
 
 `forge/manifest/pyproject.toml` (`name = "forge-manifest"`) is what a
@@ -145,28 +168,27 @@ the true repo root, two levels up from where this file sits) and
 just this namespace).
 
 **Root `forge/pyproject.toml`** is a _separate_ file serving Forge's own
-local dev/test environment. It is deliberately **not** meant to be
-depended on by external consumers as a package in the same way — nothing
-a Manifest repo does should ever depend on the whole `forge` package
-(which would transitively pull in future Terminal/Aperture tooling a
-Manifest repo has no business needing). It was later also given a
-`[build-system]`/discovery config, but only so that `example-harness`
-(see §5.1) can install Forge itself, as a whole, for **live-mode
-testing of Forge's own build-time functions** — a different, internal-use
-case from "a Manifest repo depends on forge-manifest."
+local dev/test environment, and also — since the API was added — the
+source of the `forge-api` CLI entry point (`[project.scripts]`, see §4.7).
+It is deliberately **not** meant to be depended on by external Manifest-
+repo consumers as a package (that would transitively pull in Terminal/
+Aperture tooling a Manifest repo has no business needing). It carries its
+own `[build-system]`/discovery config so that `e2e-harness` (see §5.1) can
+install the whole of Forge for **live-mode testing of Forge's own
+build-time and API functions** — a different, internal-use case from "a
+Manifest repo depends on forge-manifest," and also the case that makes
+`forge.api` (which genuinely does need every other layer importable, see
+§4.7) installable at all.
 
 **Real bug found and fixed this session:** the first attempt at
 `forge/manifest/pyproject.toml`'s `where` setting was `["."]` — searching
 relative to `forge/manifest/`'s own location. This caused
 `manifest_core`/`manifest_build` to install as **flat, top-level
-packages** (importable as bare `import manifest_core`, not nested under
-`forge.manifest`), silently breaking `forge/manifest/__init__.py`'s own
-internal relative imports (`from .manifest_core...`), since no
-`forge.manifest` namespace existed in the installed package at all. Fixed
-by searching from the true repo root instead. This is the kind of bug
-that only surfaces when something actually _installs_ the package (not
-when just running tests via `PYTHONPATH`) — worth remembering as a
-category of risk whenever packaging config changes.
+packages**, silently breaking `forge/manifest/__init__.py`'s own internal
+relative imports. Fixed by searching from the true repo root instead.
+Worth remembering as a category of risk whenever packaging config
+changes — it only surfaces once something actually _installs_ the
+package, not when just running tests via `PYTHONPATH`.
 
 ---
 
@@ -185,102 +207,61 @@ Leaf types (`StringType`, `IntType`, `FloatType`, `BoolType`,
 via `__class_getitem__` (mirroring `typing.List[X]`).
 
 `ArrayType.sql_type` is a `@property` (not a class attribute like the
-leaves) because `ARRAY(...)` needs its element type at construction time —
-there's no single generic "the array type" the way there's a single "the
-string type." Every `ManifestType` subclass still exposes `.sql_type` as
-the uniform accessor; `_make_mapped_class` never branches on array-ness.
-
-Adding a new leaf type (e.g. a future `GeometryType`) requires defining the
-class (with its own `sql_type` and `_to_source()`) and nothing else —
-`ArrayType`, `_make_mapped_class`, `infer_join_kind`, and `type_to_source`
-are all written generically against the `ManifestType` interface, never
-against a fixed set of concrete types or a separate registry dict that
-could drift out of sync with the type list.
+leaves) because `ARRAY(...)` needs its element type at construction time.
+Adding a new leaf type requires defining the class (with its own
+`sql_type` and `_to_source()`) and nothing else.
 
 ### 4.2 `defs.py` — declarations
 
 `ManifestFieldDef`, `ManifestObjectDef`, `ManifestLinkDef` are pure data
 containers — no validation, no I/O, no randomness, safe to construct
-repeatedly with identical results. This is deliberate: table names/rids are
-resolved later, by the build pipeline, using the registry as source of
-truth (see §4.4) — never generated inside a declaration's `__init__`,
-which would break idempotency across repeated builds.
+repeatedly with identical results. Table names/rids are resolved later, by
+the build pipeline, using the registry as source of truth (§4.4).
 
-**Self-registration, not variable assignment.** A coder writes:
+**Self-registration, not variable assignment.** A coder writes
+`ManifestObjectDef(display_name="Product", api_name="Product",
+fields={...})` with no variable needed — construction alone registers the
+instance with whatever `DeclarationCollector` is currently bound via
+`bind_collector()` (a context manager).
 
-```python
-ManifestObjectDef(display_name="Product", api_name="Product", fields={...})
-```
-
-with no variable needed — construction alone registers the instance with
-whatever `DeclarationCollector` is currently bound via `bind_collector()`
-(a context manager). This was chosen over scanning `vars(module)` because
-declarations are self-describing (`api_name` on objects; `source`/`target`
-on links) — the coder's local variable name is irrelevant metadata that
-discovery shouldn't depend on.
-
-`_active_collector` is a module-level global, but scoping is safe because
-`bind_collector` is a context manager: binding/unbinding always happens in
-pairs, even on exception, so one bad declaration file can't leave stale
-state for the next discovery run.
+**Field naming convention (not yet enforced in code — see §7):** a
+field's dict key in `fields={...}` is its **code-facing name**, and is
+also, by convention, its backing database column name — code always
+addresses a field by this one name. A separate, purely presentational
+`display_name` per field (mirroring `ManifestObjectDef`'s existing
+`display_name`/`api_name` split) is planned but not yet implemented on
+`ManifestFieldDef`/`ManifestField` — see §7.
 
 ### 4.3 `base.py` — runtime object machinery
 
-**`ManifestField`** — a descriptor (`__get__`/`__set__`) doing double duty:
-accessed via an instance (`some_product.cost`), it routes through
-`_get_field`/`_set_field` (edits-aware). Accessed via the class
-(`Product.cost`), it returns the raw materialized column expression, so
-`Product.cost < 100` reads naturally in `where()` calls with no
-`ProductMaterialized` ever visible to the coder. This works because
-Python's descriptor protocol calls `__get__(obj, objtype)` with `obj=None`
-specifically for class-level access — the same mechanism that lets a plain
-function become a bound method on an instance.
+**`ManifestField`** — a descriptor (`__get__`/`__set__`): accessed via an
+instance (`some_product.cost`), routes through `_get_field`/`_set_field`
+(edits-aware). Accessed via the class (`Product.cost`), returns the raw
+materialized column expression, so `Product.cost < 100` reads naturally in
+`where()` calls.
 
 **The primary key field is NOT a `ManifestField`.** It's excluded from
-`_properties` and never gets a `ManifestField` descriptor generated for
-it — only `_pk_field` (a plain string naming it) exists on the class.
-**This means `Product.product_id == "x"` does not work in a `.where()`
-call** — there is no `Product.product_id` attribute at all. To query or
-construct by primary key, use `Product("some_pk")` directly (construction
-never fails) plus a field access to force the existence check, not a
-`.where()` filter on the pk's name. This tripped up testing more than
-once this session — worth remembering as the correct idiom, not a bug.
+`_properties` and never gets a `ManifestField` descriptor — only
+`_pk_field` (a plain string naming it) exists on the class. `Product.product_id
+== "x"` does **not** work in `.where()`. To query/construct by pk, use
+`Product("some_pk")` directly plus a field access to force the existence
+check.
 
-**`ManifestObject`** — thin, pk-only wrapper (`__init__(self, pk)`). Field
-access is always live (edits-then-materialized). `create()` permanently
+**`ManifestObject`** — thin, pk-only wrapper. `create()` permanently
 retires a pk once deleted — a deleted pk can never be recreated with the
-same identity (a deliberate simplification; an explicit `undelete()` would
-be a new, separate operation if ever needed). `__eq__`/`__hash__` are
-pk-based, not identity-based, since `_wrap()` constructs a fresh Python
-object on every query result — two `Product` instances with the same pk
-are semantically the same object and should compare equal.
+same identity. `__eq__`/`__hash__` are pk-based.
 
-Confirmed via `example-harness` this session: since deletes are soft
-(`_deleted=True`, row never removed) and a pk is permanently retired once
-touched, a repeatable test script should generate a **fresh random pk**
-(e.g. `str(uuid.uuid4())`) per run rather than reusing a fixed pk like
-`"p1"` — reusing a fixed pk across runs will eventually hit "already
-exists or was previously deleted" once that pk has ever been created.
+Confirmed via `e2e-harness`: since deletes are soft and a pk is
+permanently retired once touched, a repeatable test script should
+generate a **fresh random pk** (e.g. `str(uuid.uuid4())`) per run rather
+than reusing a fixed pk.
 
-**`ManifestObjectSet`** — wraps an _unexecuted_ SQLAlchemy `Select`
-against `_materialized_cls`. `.where(...)` builds it; `.all()`/`.first()`/
-iteration execute it. Link traversal (`some_set.parts`) is implemented via
-`__getattr__`, looking up a `ManifestLink` on `_element_cls._links` and
-building a **nested subquery** — chaining `product_set.parts.vendors`
-compiles to one SQL statement with two levels of subqueries, not two
-separate round trips. `.distinct()` on the final query handles dedup at
-the database level.
+**`ManifestObjectSet`** — wraps an _unexecuted_ `Select` against
+`_materialized_cls`. Link traversal (`some_set.parts`) via `__getattr__`,
+building nested subqueries — chaining `product_set.parts.vendors` compiles
+to one SQL statement, batched per hop, not truly streaming.
 
-Consuming a chained traversal (e.g. via `.all()`) forces the whole nested
-subquery to execute at once — each hop is "lazy until consumed, batched
-per hop," not truly streaming row-by-row across hops. This is an
-intentional trade-off: true per-item streaming and N+1-avoidance are
-mutually exclusive, and batched is the right choice for the stated scale
-(tens of thousands of rows per bulk operation, not millions).
-
-**`ManifestLink`** — relationship metadata (`join_kind`, `local_field`,
-`remote_field`), consumed by `ManifestObjectSet.__getattr__` to build the
-correct join condition:
+**`ManifestLink`** — relationship metadata:
 
 | `join_kind`       | Shape                              | SQL construct used                                       |
 | ----------------- | ---------------------------------- | -------------------------------------------------------- |
@@ -288,126 +269,278 @@ correct join condition:
 | `array_fk_parent` | local array → target scalar pk     | `target_col.in_(select(func.unnest(local_col)))`         |
 | `array_fk_child`  | local scalar pk ← target array     | `target_col.op("&&")(select(func.array_agg(local_col)))` |
 
-A single `ManifestLinkDef` (declared once, on whichever side holds the FK)
-produces **two** `ManifestLink`s — forward and reverse — with correspondingly
-different `join_kind`s and swapped `local_field`/`remote_field`. There is
-no supported shape for two array columns pointing at each other
-(many-to-many via a join-table entity is the documented workaround — see
-the error message in `manifest_build/links.py`).
+A single `ManifestLinkDef` produces **two** `ManifestLink`s (forward and
+reverse). No supported shape for two array columns pointing at each other.
 
 ### 4.4 `registry.py` — schema bookkeeping and DDL
 
-**`ObjectRegistry`** is the durable, cross-restart source of truth: one row
-per `api_name`, recording resolved table names and a serialized schema
-fingerprint. **`_registered_classes`** is a separate, same-process-only
-cache preventing SQLAlchemy from double-mapping a table name within one
-run — it must be cleared at the start of every build (and between tests;
-see §5) since it does not track database state at all, only "have I built
-this Python class in this process."
+**`ObjectRegistry`** is the durable, cross-restart, **transactional**
+source of truth: one row per `api_name`, recording resolved table names
+and a serialized schema fingerprint. **`_registered_classes`** is a
+separate, same-process-only cache preventing SQLAlchemy from
+double-mapping a table name within one run.
 
-**`ensure_registered`** enforces three conditions once a registry row exists:
+**`ensure_registered`** enforces three conditions once a registry row
+exists:
 
 1. The registry row's referenced tables actually exist in the database.
 2. The registry row's tables match the tables passed to this call.
 3. The registry row's recorded schema matches the freshly-built schema
-   (raises `SchemaConflictError` on mismatch).
+   (raises `SchemaConflictError` on mismatch — see §7 for the planned
+   safe/unsafe migration classifier that will relax this).
 
 A fourth condition — "a class must already exist in `_registered_classes`
-whenever a registry row exists" — was tried and removed. It's wrong for the
-single most common real case: the _first_ call in a fresh process against
-an _already-registered_ object (a normal second build, run later, in a new
-process) legitimately has no cached class yet — `_registered_classes`
-starts empty every process, by design. Treating that as an error would
-make every real rebuild fail on its very first `ensure_registered` call.
-The one case worth still catching — a class cached under this name with
-_no_ matching registry row at all, meaning two different `api_name`s are
-colliding on one table name within a process — remains a hard error.
+whenever a registry row exists" — was tried and removed; it broke the
+single most common real case (first call in a fresh process against an
+already-registered object).
 
-On a genuine clean slate (no row, no cached class), it creates the edits
-table, the materialized view, a unique index, and the registry row — all
-via the **same `Session`**, never its own transaction. This is deliberate:
-`ensure_registered` performs no commit and no flush; the caller
+On a genuine clean slate, `ensure_registered` creates the edits table, the
+materialized view, a unique index, and the registry row — all via the
+**same `Session`**, no commit/flush of its own. The caller
 (`build_msdk_within_session`) commits once, after looping over every
-declared object, giving **cross-object atomicity** — either every object
-in a build registers together, or (on any single failure) the whole build
-rolls back, including DDL, which is transactional in Postgres.
+declared object, giving **cross-object atomicity**.
 
-Any partial mismatch among the conditions above is a **hard error**, not
-an auto-repair — the documented recovery path is manual: inspect the
-database, likely delete the offending `ObjectRegistry` row, and rebuild.
+`ensure_registry_table` bootstraps the registry table itself.
 
-`ensure_registry_table` bootstraps the registry table itself and must be
-called once, before any `ensure_registered` calls, against a fresh
-database.
-
-### 4.5 `spinup.py` / `env_init.py` — scaffolding a standalone declarations repo
+### 4.5 `spinup.py` / `open.py` / `env_init.py` — scaffolding, opening, and environment setup
 
 **`spinup_manifest_repo(target_dir)`** creates a new manifest repo where
-`target_dir` **is** both the git repo root and the importable Python
-package — `pyproject.toml`, `README.md`, `__init__.py`, `src/declarations/`,
-and `_build/` all live directly inside it, flat, with no extra nesting.
-This means `target_dir`'s own folder name must be a valid Python
-identifier (no hyphens), since it doubles as the package name a consumer
-will `import`. For **local-directory** spinup specifically, an invalid
-name is auto-corrected (hyphens → underscores, lowercased) rather than
-rejected — the function creates the scaffold at a sibling, corrected path
-and returns that actual path, which callers must use rather than assuming
-it matches their input string. This auto-correction is intentionally
-local-only: a future git-clone-based spinup path must take a cloned
-repo's folder name as authoritative and raise instead of silently
-renaming it, since a git repo's name isn't something spinup can rewrite.
+`target_dir` **is** both the repo root and the importable Python package.
+For **local-directory** spinup, an invalid folder name (e.g. containing
+hyphens) is auto-corrected; the function returns the actual path used,
+which callers must use. This auto-correction is local-only — a git-clone
+target's folder name is authoritative (see §4.6).
 
-`_build/` (underscore, not a literal dot) is the generated output
-directory — named with a leading underscore specifically so it's both a
-valid importable Python package name and carries the "internal, don't
-touch" convention. The root `__init__.py` re-exports everything from
-`_build/`, so a consumer always writes `from my_manifest_repo import
-Product`, never anything referencing `_build` directly — codegen's
-`generate_build_init_source` produces `_build/__init__.py`'s
-`__all__`/import lines on every build, kept in sync with whatever objects
-were actually declared.
+`_build/` (underscore) is the generated output directory. The root
+`__init__.py` re-exports everything from `_build/`, kept in sync on every
+build by `generate_build_init_source`.
 
 **Real bug found and fixed this session:** `build_msdk_within_session`
-was writing `_generated.py` correctly but **never actually calling
-`generate_build_init_source`**, even though that function existed
-correctly in `codegen.py`. This meant `_build/__init__.py` stayed
-permanently at its spinup-time placeholder (`__all__ = []`), even after a
-fully successful build — so `from my_manifest_repo import Product` always
-raised `ImportError`, silently, while `_generated.py` itself was
-completely correct. This went undetected for a while because most testing
-either imported `_generated.py`'s contents directly (bypassing the
-`_build/__init__.py` re-export) or used `exec()`-based codegen tests that
-never touched the file-writing step. It was only caught once
-`example-harness`'s CRUD test exercised the actual, intended top-level
-import path. **Lesson: a passing unit test for `generate_build_init_source`
-existing and working correctly does not prove `builder.py` calls it —
+was writing `_generated.py` but **never actually calling
+`generate_build_init_source`**, leaving `_build/__init__.py` permanently
+at its placeholder (`__all__ = []`) even after a successful build — so
+`from my_manifest_repo import Product` always raised `ImportError`. Only
+caught once `e2e-harness`'s CRUD test exercised the actual top-level
+import path. **Lesson: a passing unit test for a codegen function existing
+and working does not prove the builder actually calls it** —
 `test_builder.py` needs its own assertion on `_build/__init__.py`'s
-content, not just `_generated.py`'s.**
+content, not just `_generated.py`'s (now added).
 
-**`init_environment(repo_dir)`** sets up an isolated environment for a
-spun-up repo using `uv` (a standalone binary, not a Python package):
-`uv venv` creates the venv, `uv pip compile pyproject.toml -o
-requirements-lock.txt` resolves the repo's declared (range-based)
-dependencies into an exact, reproducible lock file, `uv pip install -r
-requirements-lock.txt` installs from that lock file. This mirrors the
-same declare-loosely/pin-exactly split used everywhere else in this
-system — `pyproject.toml` is human-facing and never installed from
-directly; `requirements-lock.txt` is the machine-generated, reproducible
-artifact that installation actually reads. This function is layer-agnostic
-(no Manifest-specific logic) and is intended to be reused as-is for
-Terminal/Aperture repo spinup later.
+**`open_manifest_repo(repo_dir, open_editor=True)`** (in `open.py`)
+prepares a manifest repo for local development: recreates its venv via
+`init_environment`, writes `.vscode/settings.json` pointing at the venv's
+Python (see §5.1's Pylance gotchas for why this file's content matters),
+and — if `open_editor` — launches VS Code via a **single** `code <dir>
+<example_file> --goto <readme>` call. This opens with `README.md` focused
+and the starter declaration file as a background tab. Using one combined
+`code` invocation (rather than two sequential calls) is deliberate — an
+earlier two-call version had a race condition where the second call could
+land before the first window finished initializing, causing the wrong
+file to end up focused.
 
-**Real bug found and fixed this session:** the original `init_environment`
-didn't pass `--python` explicitly to `uv pip compile`/`install`. `uv`
-resolves which environment to target partly via the inherited
-`VIRTUAL_ENV` environment variable — if the calling shell already had a
-_different_ venv active (e.g. Forge's own dev venv), `uv` silently
-installed into that ambient environment instead of the freshly-created
-one at `repo_dir/.venv`, with no error. Fixed by passing
-`--python <repo_dir>/.venv/bin/python` explicitly on every `uv` call.
-**Lesson: never rely on an ambient `VIRTUAL_ENV`/`PATH` state when a
-script needs to target a specific, just-created venv — always pass
-`--python`/an explicit interpreter path.**
+`open_editor=False` exists specifically so automated tests (and any
+future headless/CI use) can exercise the environment-setup half of this
+function without a GUI editor window appearing.
+
+**`init_environment(repo_dir)`** sets up an isolated environment using
+`uv`: `uv venv --clear`, `uv pip compile pyproject.toml -o
+requirements-lock.txt --python <venv>/bin/python`, `uv pip install -r
+requirements-lock.txt --python <venv>/bin/python`.
+
+**Two real bugs found and fixed this session:**
+
+- The original `uv venv` call (no `--clear`) would hang **indefinitely**
+  waiting for an interactive y/n prompt if a venv already existed at the
+  target path. This is invisible when run interactively (you just type
+  `y`), but when called from the Forge API server (no attached terminal),
+  the request would simply hang forever with no error. Fixed with
+  `--clear`, which silently replaces an existing venv with no prompt.
+  **Lesson: any subprocess call that could prompt interactively must be
+  made non-interactive before it's ever called from a server process —
+  it will hang silently, not fail loudly, if you don't.**
+- The original calls didn't pass `--python` explicitly; `uv` would
+  silently install into whatever venv was ambiently active via the
+  calling shell's `VIRTUAL_ENV`, not the freshly-created target venv.
+  Fixed by always passing `--python <repo_dir>/.venv/bin/python`
+  explicitly.
+
+### 4.6 `git_ops.py` — generic git primitives, and the git-aware composition layer
+
+**Scope decision:** for now, Forge only clones/operates on **already-
+existing** remote repos the user provides a URL for — it does not create
+new remote repositories via GitHub's API. This avoids needing GitHub API
+tokens/auth entirely for this layer; only plain `git` (clone/commit/push/
+tag) is used.
+
+**Credentials philosophy:** Forge's git operations never see, store, or
+manage any credential. They shell out to plain `git` commands, and
+authentication is resolved exactly however the user's own machine already
+resolves it for any manual `git push` — an SSH key registered with the
+remote (SSH agent), a cached HTTPS credential (OS keychain / credential
+helper), or a PAT embedded in the remote URL if the user chose that. This
+means **zero new security surface**: Forge is not a secrets store, and a
+user who has ever successfully pushed to a given remote from their own
+machine needs no additional setup for Forge's git operations to work
+against that same remote. The trade-off: a user who has never configured
+git authentication at all gets no in-app guidance beyond a clear error
+message pointing at GitHub's own SSH setup docs — this is a deliberate,
+accepted gap for now, not an oversight.
+
+**`_run_git(args, cwd)`** — the one place every git subprocess call goes
+through. Always sets `GIT_TERMINAL_PROMPT=0` in the subprocess's
+environment (a copy of the calling process's env, not a mutation of it —
+this has zero effect on the user's own shell/git configuration once the
+subprocess exits). This guarantees a git operation that would need
+interactive input (e.g. a credential prompt) **fails immediately with a
+clear error** instead of hanging forever — the same class of fix as
+`env_init.py`'s `uv venv --clear`, applied to git specifically.
+
+**`clone_repo(git_url, target_dir, branch=None)`** — clones an
+already-existing repo. Raises `FileExistsError` if `target_dir` already
+exists (git clone itself requires a nonexistent/empty destination); this
+is intentionally **not** auto-corrected the way local spinup's invalid
+folder names are — a cloned repo's name/location is caller-determined and
+authoritative.
+
+**`commit_repo(repo_dir)`** — stages everything (`git add -A`) and commits
+with a fixed message (`FORGE_BUILD_COMMIT_MESSAGE = "Forge build
+commit"`). Detects "nothing to commit" via `git diff --cached --quiet`
+and returns `{"committed": False}` rather than erroring. Does **not**
+push.
+
+**`push_repo(repo_dir)`** — pushes the current branch. Raises
+`GitOperationError` with git's own stderr on failure (most commonly an
+auth failure or a rejected/behind push).
+
+**`commit_and_push(repo_dir)`** — the generic composition of the two
+above; skips the push entirely if there was nothing to commit, rather
+than pushing anyway (an earlier draft of this function pushed
+unconditionally even with nothing new — reconsidered as misleading: a
+caller asking to "publish changes" shouldn't have a silent, unrequested
+push happen when there were no changes at all).
+
+**`tag_repo(repo_dir, tag)`** — creates a tag at HEAD and pushes it.
+Deliberately a **separate** function from commit/push, not folded into
+one "publish with optional tag" function — tagging is a distinct action
+with its own intent, not a mode of committing.
+
+**The composed, domain-specific functions** (living in `spinup.py`/
+`builder.py`/`open.py`, each importing only `git_ops`, never each other):
+
+- **`git_spinup_manifest_repo(git_url)`** (in `spinup.py`) — clones to a
+  temp directory, scaffolds it via `spinup_manifest_repo`, commits and
+  pushes the scaffold via `commit_and_push`. No tagging.
+- **`git_open_manifest_repo(git_url, branch="main", open_editor=True)`**
+  (in `open.py`) — clones to a **deterministic** temp path keyed by repo
+  name and branch (`<tempdir>/forge_git_open/<repo_name>/<branch>`,
+  derived from the git URL, not randomly generated), then delegates to
+  `open_manifest_repo`. **Reuse-if-present**: if that deterministic path
+  already exists, it is _not_ re-cloned — the existing local checkout is
+  opened as-is. This was a deliberate design change from an earlier
+  always-fresh-clone version: always deleting and re-cloning on every
+  call meant calling `git-open` a second time while a VS Code window from
+  the first call was still open would delete that window's files out from
+  under it. Reuse-if-present means repeated `git-open` calls against the
+  same repo+branch are safe and idempotent, at the cost of not
+  automatically picking up upstream changes pushed by someone else to
+  that branch in the meantime — an accepted trade-off for a single-
+  developer local workflow.
+- **`git_build_manifest_repo(git_url, tag, engine)`** (in `builder.py`) —
+  clones fresh to a temp directory (always fresh, unlike `git_open` — a
+  build should reflect exactly what's currently on the remote, not a
+  possibly-stale local checkout), runs `build_msdk_within_session`,
+  commits + pushes the generated output via `commit_and_push`, then tags
+  via `tag_repo`. Requires a `tag` — build-and-publish without a
+  resulting tag is not a supported combination for the git-aware path,
+  since the practical purpose of a git build is producing something a
+  downstream repo (e.g. Terminal) can pin a dependency to.
+
+**Validated end-to-end this session** against a real GitHub repo
+(`https://github.com/mehdidotesk73/test_manifest_repo_git.git`, an HTTPS
+remote — confirming HTTPS-credential-based auth, not just SSH, works
+through this whole chain): `git-spinup` → `git-open` (edit a real
+declaration in the opened VS Code window) → `git-commit` (via the plain
+`commit_and_push` route, using the exact `repo_path` `git-open` returned)
+→ `git-build` (fresh clone, real build against `forge_dev`, commit, push,
+tag) — all four steps succeeded via real HTTP calls through Swagger UI,
+with each git-side effect (commits, the new tag) confirmed directly on
+GitHub afterward.
+
+### 4.7 `forge/api/` — the HTTP service layer
+
+**Why this needs every other layer importable, unlike Manifest/Terminal/
+Aperture needing each other:** Manifest and Terminal never import each
+other's source — a Terminal-built repo can depend on a Manifest-built
+repo as an installed _package_, but that's a relationship between
+generated artifacts, not between Forge's own layer code. `forge.api`
+is structurally different: its entire job is directly importing and
+calling each layer's real functions to expose them as HTTP routes (e.g.
+`routes/manifest.py` directly calls `spinup_manifest_repo`). There is no
+artifact-level indirection possible for this — the API _is_ the wrapping.
+This is why `forge-api`'s CLI entry point is declared in **root**
+`forge/pyproject.toml` (installing root `forge` gives you every
+subpackage, `forge.api` included) rather than `forge/api/` having its own
+independent `pyproject.toml` the way `forge/manifest/` does — there is no
+realistic scenario where someone wants `forge-api` installed without the
+rest of Forge also being present, unlike Manifest, which is deliberately
+usable standalone.
+
+**`main.py`** creates the `FastAPI()` app and calls `app.include_router(...)`
+once per layer's router — kept intentionally small forever; it should
+never accumulate route logic itself as Terminal/Aperture routers are
+added later.
+
+**`routes/manifest.py`** — one `APIRouter(prefix="/manifest", tags=["manifest"])`,
+one route per `manifest_build` function, each a thin try/except wrapper
+translating Python exceptions to HTTP status codes (`FileExistsError` →
+409, `FileNotFoundError`/missing-declarations → 404, `GitOperationError`
+→ 400 or 401, generic build failure → 400). Routes: `/spinup`, `/build`,
+`/open`, `/registry` (GET), `/clone`, `/git-commit`, `/tag`,
+`/git-spinup`, `/git-open`, `/git-build`.
+
+**`cli.py`** — `forge-api run` (registered via root `pyproject.toml`'s
+`[project.scripts]`). Auto-detects the first open port starting at 8000
+(binds a throwaway socket per candidate port to test availability, since
+multiple `forge-api run` sessions or leftover processes commonly occupy
+8000/8001 during iterative development) rather than failing if 8000 is
+taken. Prints a clear startup banner pointing at `/docs` (Swagger UI) —
+FastAPI's own default log line only prints the bare base URL, which
+doesn't tell a first-time user where the actually-useful interactive page
+is.
+
+**Swagger UI (`/docs`), auto-generated by FastAPI from the routes above,
+is treated as a first-class user interface, not just documentation** — a
+real end user can spin up, open, build, and publish a Manifest repo
+entirely by clicking through Swagger UI's "Try it out" forms, with zero
+Python knowledge and zero memorized CLI commands. A future custom UI
+(e.g. a `forge-gui`) would be strictly additive on top of this same route
+surface, not a replacement — and is explicitly understood to be "another
+potential point of failure" layered on top of an already-working
+interface, not a prerequisite for Forge being usable.
+
+**`registry.json` and `GET /manifest/registry`:** every build now also
+writes `_build/registry.json` (via `generate_registry_json` in
+`codegen.py`), a machine-readable description of each declared object's
+`display_name`, `pk_field`, resolved `edits_table`/`materialized_table`,
+`fields` (type/primary_key/nullable/index), `properties`, `links`
+(traversal attribute name → target + join_kind), and the fixed `methods`
+list (`create`/`delete`/`where` — uniform across every object, so listed
+rather than described in detail). `GET /manifest/registry?repo_dir=...`
+reads and returns this file. Intended for future consumption by a
+Terminal-layer build (to know what it can import) and a future GUI —
+**not** a replacement for the database `ObjectRegistry` (see below).
+
+**`registry.json` vs. the database `ObjectRegistry` — related, not
+redundant.** The database `ObjectRegistry` is the transactional source of
+truth `ensure_registered` depends on for real correctness guarantees:
+schema-drift detection and cross-object atomicity only work because they
+happen inside one Postgres transaction, against the live database.
+`registry.json` is a **derived, read-only export** of that state at build
+time, for consumers who need to know a repo's shape without needing
+database access or transactional guarantees. `ensure_registered` must
+never read from `registry.json`, and `registry.json` must never be
+treated as a source of truth for build-time correctness — it is a
+snapshot for external consumption only.
 
 ---
 
@@ -415,165 +548,164 @@ script needs to target a specific, just-created venv — always pass
 
 Tests run against **real Postgres**, never SQLite — the design leans on
 Postgres-specific features (`MATERIALIZED VIEW`, `ARRAY`, `&&`, `unnest`)
-that have no SQLite equivalent, so anything less than the real engine would
-give false confidence.
+that have no SQLite equivalent.
 
 - `tests/docker-compose.test.yml` defines an isolated, `tmpfs`-backed
-  (non-persistent) Postgres container, separate from the real dev database
-  in the repo-root `docker-compose.yml`.
+  Postgres container, separate from the real dev database.
 - `tests/conftest.py`'s session-scoped `engine` fixture starts the
   container, waits for a **real query to succeed** (not just
-  `pg_isready` — a Postgres container can report ready during its internal
-  restart-during-init cycle and still refuse the next connection), creates
-  the registry table, and tears the container down at session end.
-- The function-scoped `db_session` fixture wraps each test in a
-  connection-level transaction that's always rolled back — Postgres DDL is
-  transactional, so this cleanly undoes `CREATE TABLE`/`CREATE MATERIALIZED
-VIEW` per test, not just row data.
-- Because `_registered_classes` and SQLAlchemy's own declarative
-  registry are process-level state independent of the database rollback,
-  `db_session`'s teardown also removes any dynamically-created tables from
-  `Base.metadata` and clears `_registered_classes` — otherwise a second
-  test reusing the same `api_name` sees a same-process cache the database
-  rollback never touched, producing confusing "class exists but registry
-  row doesn't" errors that have nothing to do with the code under test.
-  A shared `reset_registered_classes()` helper does this and is also
-  callable mid-test, for tests that deliberately simulate "a fresh
-  process" partway through (e.g. schema-conflict detection tests).
+  `pg_isready`), creates the registry table, tears down at session end.
+- The function-scoped `db_session` fixture wraps each test in a rolled-
+  back transaction; teardown also removes dynamically-created tables from
+  `Base.metadata` and clears `_registered_classes` via a shared
+  `reset_registered_classes()` helper (also callable mid-test, for tests
+  that deliberately simulate "a fresh process" partway through).
 
-### 5.1 `example-harness` — a second, complementary layer of testing
+### 5.1 `e2e-harness` — a second, complementary layer of testing (renamed and restructured this session)
 
-Separate from the unit-test suite above, a sibling directory
-(`example-harness/`, outside Forge's own repo, alongside it) exists for
-**end-to-end validation against a real, persisting dev database**, for
-manual review (e.g. via TablePlus) — something the ephemeral, rolled-back
-unit-test database structurally cannot provide.
+Originally a single `example-harness/` directory; restructured into
+`e2e-harness/{forge-e2e-testing, forge-api-e2e-testing}`, both sharing one
+`harness_config.py`/`init_workspace.py`/`.venv` at the `e2e-harness/`
+root. Sharing one environment for both subfolders is deliberate — it
+guarantees both testing tiers are always exercising the exact same
+version of Forge (live or a specific branch/tag), removing any doubt
+about which code path is under test.
 
-The harness has its own venv and `pyproject.toml`/`init_workspace.py`
-setup, driven by a small `harness_config.py` (`MODE = "live"` or
-`"branch"`, plus a `REF` for branch mode). This distinguishes two tiers of
-end-to-end testing:
+- **`forge-e2e-testing/`** — direct Python function calls against
+  `forge.manifest.manifest_build.*` (spinup, build, a CRUD test script).
+  This is the original `example-harness` content, moved unchanged; its
+  scripts' use of `Path(__file__).resolve().parent`-based anchoring meant
+  the move required zero code changes.
+- **`forge-api-e2e-testing/`** — the same scenarios, but via FastAPI's
+  `TestClient(app)`, calling the real HTTP routes in-process (no server
+  process, no port, no `uvicorn`) — genuinely exercises the API layer
+  itself (request parsing, status codes, response models), not just the
+  functions underneath it. Uses `open_editor: False` for `/manifest/open`
+  calls specifically — the real, intended use case for that parameter:
+  automated tests need to verify the environment-setup logic without a
+  VS Code window popping up during a test run.
 
-- **Live mode** — Forge itself is installed via an **editable install**
-  pointed directly at Forge's own repo on disk (`uv pip install -e
-<forge_root>`), so edits to Forge's source take effect immediately with
-  no reinstall. This is the fast inner loop for validating changes while
-  actively developing Forge.
-- **Branch mode** — Forge is installed via a real, resolved git reference
-  (`forge @ git+https://...@<branch-or-tag>`), exactly matching what an
-  external consumer would experience. This is what actually exercises the
-  packaging/distribution mechanism itself, catching the class of bug
-  described in §3.1 and §4.5 that live mode (or unit tests) cannot catch,
-  since neither of those ever goes through a real install.
+**Live mode** — Forge installed via editable install (`uv pip install -e
+<forge_root> --config-settings editable_mode=compat --no-deps`), then its
+declared runtime dependencies separately compiled/installed from root
+`pyproject.toml`. Edits to Forge's source take effect immediately with no
+reinstall (for genuine editable installs — see the Pylance gotcha below
+for why `--config-settings editable_mode=compat` specifically matters).
 
-**Real gotcha found and fixed this session: editable installs are
-invisible to Pylance by default.** Modern `pip`/`uv` editable installs use
-a PEP 660 import-hook mechanism (a generated finder module) rather than a
-simple path redirect — this works perfectly at runtime, but VS Code's
-Pylance does purely _static_ analysis and cannot see through the runtime
-hook, making a correctly-installed editable package look like an empty,
-unresolvable import in the editor even though it works when actually run.
-Fixed by installing with `--config-settings editable_mode=compat`, which
-uses the older, `.pth`-file-based editable mechanism — a plain path
-addition, fully visible to static analysis. This flag is now baked into
-both `example-harness/init_workspace.py`'s live-mode install and
+**Branch mode** — Forge installed via a real, resolved git reference
+(`forge @ git+https://...@<branch-or-tag>`), exactly matching what an
+external consumer would experience. This is what actually exercises the
+packaging/distribution mechanism, catching bugs live mode structurally
+cannot (e.g. a stale tag reference baked into a template, or a namespace-
+flattening packaging bug — both found and fixed this session, see §3.1
+and the note above).
+
+**Real gotcha found and fixed: editable installs are invisible to
+Pylance by default.** Modern `pip`/`uv` editable installs use a PEP 660
+import-hook mechanism, invisible to Pylance's purely static analysis —
+correctly-installed, fully working code appears as an unresolvable import
+in the editor. Fixed with `--config-settings editable_mode=compat`
+(the older `.pth`-file-based mechanism, a plain path addition Pylance can
+see). Baked into `init_workspace.py`'s live-mode install and
 `scripts/mount_repo.sh`.
 
-A second, related gotcha: VS Code's `python.defaultInterpreterPath`
-setting does not reliably resolve the `${workspaceFolder}` variable in
-all versions — the fix used here is to have the setup script itself
-(`init_workspace.py`, `mount_repo.sh`) write `.vscode/settings.json` with
-the venv's **fully resolved absolute path**, generated fresh on every
-run, rather than a variable-based path a human hand-writes once. This
-keeps the _scripts_ portable (they compute the path from an anchor, same
-as everywhere else in this codebase) while the _generated_ settings file
-is correctly machine-specific and gitignored, not committed.
+**A second, related gotcha:** VS Code's `python.defaultInterpreterPath`
+does not reliably resolve the `${workspaceFolder}` variable in all
+versions. Fixed by having the setup script itself write
+`.vscode/settings.json` with the venv's fully resolved **absolute** path,
+generated fresh on every run — keeping the _scripts_ portable while the
+_generated_ settings file is correctly machine-specific and gitignored.
 
-`scripts/mount_repo.sh` (Forge repo root) is the general-purpose version
-of this same "set up venv, install deps, configure Pylance, open VS Code"
-pattern, intended for any Forge-managed repo (a real spun-up Manifest
-repo, later a Terminal repo) — not just harness-internal testing repos.
+**A recurring, unrelated gotcha worth remembering:** conda's `base`
+environment auto-activating in a fresh terminal (if configured to do so)
+silently shadows an intended venv, and stale shell command-hash caches
+(`hash -r` fixes) can point `pytest`/`python` at the wrong interpreter
+even when `$PATH` itself is correct. Both were hit multiple times this
+session and are pure local-environment quirks, not Forge bugs — worth
+checking `which python`/`which pytest` and the actual resolved path
+whenever behavior seems inexplicably wrong.
+
+`scripts/mount_repo.sh` (Forge repo root) is the general-purpose,
+bash-CLI version of the same "set up venv, install deps, configure
+Pylance, open VS Code" pattern that `open_manifest_repo` now also
+provides as a real, reusable Python function — worth eventually having
+`mount_repo.sh` call into that function rather than duplicating the logic
+in bash, though this consolidation hasn't been done yet (see §7).
 
 ---
 
 ## 6. Known trade-offs and deliberate gaps
 
-- **Traversal bypasses native SQLAlchemy `relationship()`.** Given the
-  array-based FK shapes and the edits/materialized split, hand-rolled
-  `Select`/subquery composition was judged a better fit than
-  `relationship()` + `primaryjoin=` boilerplate for every shape. This means
-  bugs in traversal are bugs in `ManifestObjectSet`/`ManifestLink`, not
-  something SQLAlchemy's own loader-strategy machinery can be blamed for
-  or fixed independently.
-- **Materialized-view refresh is out of scope for `manifest_core`.**
-  Nothing in this module calls `REFRESH MATERIALIZED VIEW CONCURRENTLY`.
-  That responsibility belongs to whatever owns "keep the database fresh"
-  (a scheduled job, a Terminal-layer hook) — deliberately kept outside
-  `manifest_core` so the build/runtime split stays clean (Forge is
-  build-time only; nothing it produces should depend on Forge still
-  running). Confirmed via `example-harness` this session: `.where()`
-  genuinely returns nothing until a manual refresh, even right after a
-  successful `create()` — see §2 and §7.
-- **No FK-constraint enforcement at the database level.** Materialized
-  views can't carry real foreign keys, and nothing writes directly to
-  them anyway. Referential integrity for links is enforced only by
-  application logic (`discover_declarations`'s validation), not by
-  Postgres.
+- **Traversal bypasses native SQLAlchemy `relationship()`** — hand-rolled
+  `Select`/subquery composition, judged a better fit than
+  `relationship()` + `primaryjoin=` boilerplate for the array-based FK
+  shapes involved.
+- **Materialized-view refresh is out of scope for `manifest_core`** —
+  deliberately kept outside so the build/runtime split stays clean.
+- **No FK-constraint enforcement at the database level** — referential
+  integrity for links is enforced only by `discover_declarations`'s
+  application-level validation.
 - **Rid/table-name generation is a placeholder for a future `Dataset`
-  abstraction.** `edits_table`/`materialized_table` are currently literal
-  physical table names. A planned `Dataset` concept (wrapping dotted rids,
-  with version/branch resolution) will change this into an indirection
-  layer — `ensure_registered` and `_make_mapped_class` will need rework at
-  that point.
-- **Many-to-many via two array columns is unsupported by design**, not by
-  omission — `infer_join_kind` raises with an explicit suggestion (a
-  join-table entity with two scalar-or-list links) rather than attempting
-  to guess intent.
+  abstraction** — `edits_table`/`materialized_table` are currently literal
+  physical table names; a planned `Dataset` concept will add an
+  indirection layer here.
+- **Many-to-many via two array columns is unsupported by design.**
+- **Forge's git operations never create remote repositories** — only
+  clone/operate on already-existing ones the user provides a URL for.
+  Creating new remotes via GitHub's API (requiring token-based auth) is
+  explicitly out of scope for now — see §7.
+- **`git_open_manifest_repo`'s reuse-if-present local checkout can go
+  stale** relative to the remote if someone else (or the user, from a
+  different machine) pushes to the same branch — no automatic pull/
+  refresh happens. Accepted trade-off for a single-developer local
+  workflow; would need reconsideration for any multi-developer use case.
 
 ---
 
 ## 7. What's not yet built
 
-Codegen, builder orchestration (including cross-object-atomic
-registration and table-name reuse across rebuilds), repo spinup, and a
-working end-to-end test harness (`example-harness`, both live and branch
-mode) are now complete and validated against real Postgres — see §4 and
-§5 above. What remains:
+Codegen, builder orchestration, repo spinup/open, the full git-backed
+operations layer (clone/commit/push/tag, composed into git-aware
+spinup/open/build), the `registry.json` export, and the Forge API service
+(with both live and branch-mode `e2e-harness` validation) are now
+complete — see §4 and §5 above. What remains, in the currently intended
+order:
 
-- **A manual materialize/refresh helper** — a small function taking an
-  object's rid (or api_name) and running `REFRESH MATERIALIZED VIEW
-CONCURRENTLY` for just that object's materialized table, so tests (and
-  possibly a future Terminal-layer hook) can deliberately exercise the
-  bulk-access path without waiting for or building a full scheduler.
-  Small, not yet built — noted here so it isn't lost.
+- **`ManifestFieldDef`/`ManifestField` display names** — a field's dict
+  key in `fields={...}` should remain the code-facing/column name
+  (unchanged), but `ManifestFieldDef` should gain a `display_name`
+  parameter (mirroring `ManifestObjectDef`'s existing `api_name`/
+  `display_name` split) for future UI use. Requires updates to
+  `ManifestFieldDef`, `ManifestField`, codegen's field-emission logic, and
+  `registry.json`'s field entries. Planned to land in the same branch as
+  the codegen redundancy cleanup below, since both touch the same code.
+- **The `_properties`/`_nullable_map`/`_pk_field` redundancy with
+  `ManifestField` declarations** — codegen currently emits this
+  information twice. A cleaner design would derive them from the
+  `ManifestField` descriptors themselves at class-creation time (e.g. via
+  `__init_subclass__`), collapsing the redundancy. Now that the full
+  spinup → declare → build → import → git → API pipeline is proven
+  end-to-end, this refactor has a working test suite as a safety net.
+- **A manual materialize/refresh helper** — a function taking a list of
+  object identifiers and running `REFRESH MATERIALIZED VIEW CONCURRENTLY`
+  for each. Planned to accept a list and process each object as one
+  independent, self-contained call from the start (even though the first
+  implementation will simply loop sequentially), so that swapping in
+  parallel execution later (e.g. `asyncio.gather`, a thread pool) is a
+  change to the loop construct only, not a restructuring of the function
+  itself. An API endpoint wrapping it is planned alongside.
 - **Schema migration** — `ensure_registered` currently treats _any_ schema
   diff (once a registry row already exists) as fatal via
-  `SchemaConflictError`. A planned safe/unsafe diff classifier (nullable
+  `SchemaConflictError`. A safe/unsafe diff classifier (nullable
   relaxation and additive nullable fields auto-apply; type changes, field
-  removal, and nullable tightening require explicit migration) is designed
-  but not implemented.
-- **Git-backed spinup/build/publish** — `spinup_manifest_repo`/
-  `build_msdk_within_session`/`init_environment` all operate on plain
-  local filesystem paths only, by design. The git layer around them —
-  clone-to-temp, build, commit, tag, push — is designed conceptually but
-  not yet implemented.
-- **Forge API service** — an HTTP layer exposing spinup/build/publish as
-  endpoints (so a caller can trigger these without direct Python function
-  calls) is planned but not started. Deliberately sequenced _after_ the
-  git-backed layer above, so the API has the complete functionality to
-  expose rather than only the local-directory subset.
-- **`_properties`/`_nullable_map`/`_pk_field` redundancy with
-  `ManifestField` declarations** — codegen currently emits this
-  information twice (once via `ManifestFieldDef` in `_fields_X`, once via
-  these class attributes). A cleaner design would derive them from the
-  `ManifestField` descriptors themselves at class-creation time (e.g. via
-  `__init_subclass__`), collapsing the redundancy. Deliberately postponed
-  until the full spinup → declare → build → import → git pipeline is
-  proven end-to-end (now largely true for the local-path version — still
-  worth waiting for the git-backed layer too), so this refactor has a
-  working test suite as a safety net rather than being done mid-pipeline.
+  removal, and nullable tightening are breaking and require explicit
+  migration) is designed in principle but not implemented.
+- **Consolidating `scripts/mount_repo.sh` to call `open_manifest_repo`
+  directly** rather than duplicating its logic in bash, now that the
+  latter exists as a real, tested Python function.
+- **Creating new remote repositories via GitHub's API** — current git
+  scope only clones/operates on already-existing remotes; a user must
+  create the empty repo themselves before Forge can spin it up.
 - **Terminal and Aperture layers** — not started. The same
-  spinup/build/publish pattern (directory-level build, git-level publish,
-  `pyproject.toml` + lock file dependency management via `uv`,
-  `mount_repo.sh`-style IDE setup) is intended to generalize directly to
-  both, per design discussion, but no code exists yet for either.
+  spinup/open/build/git-backed-publish/API-route pattern is intended to
+  generalize directly to both.
