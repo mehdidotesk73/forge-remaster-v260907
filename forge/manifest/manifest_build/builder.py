@@ -10,7 +10,11 @@ from forge.manifest.manifest_core.registry import (
     ObjectRegistry,
 )
 from .discovery import discover_declarations
-from .codegen import generate_module_source, generate_build_init_source
+from .codegen import (
+    generate_module_source,
+    generate_build_init_source,
+    generate_registry_json,
+)
 
 
 def _resolve_table_names(api_name: str, session: Session) -> tuple[str, str, str]:
@@ -84,15 +88,17 @@ def build_msdk_within_session(
     generated_file.write_text(source)
     print(f"[builder] wrote {generated_file}")
 
-    print(
-        f"[builder] calling generate_build_init_source with {len(collector.objects)} objects"
-    )
     init_source = generate_build_init_source(collector.objects)
-    print(f"[builder] init_source content: {init_source!r}")
-
     init_path = output_path / "__init__.py"
     init_path.write_text(init_source)
     print(f"[builder] wrote {init_path}")
+
+    registry_source = generate_registry_json(
+        collector.objects, collector.links, resolved_names
+    )
+    registry_path = output_path / "registry.json"
+    registry_path.write_text(registry_source)
+    print(f"[builder] wrote {registry_path}")
 
     return generated_file
 

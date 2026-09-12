@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import sys
 import pytest
 
@@ -50,6 +51,22 @@ ManifestObjectDef(
     module = _import_generated(generated_file)
     BuilderWidget = module.BuilderWidget
     assert BuilderWidget._pk_field == "widget_id"
+
+    init_file = output_dir / "__init__.py"
+    assert init_file.exists()
+    assert "BuilderWidget" in init_file.read_text()
+    assert "BuilderWidgetSet" in init_file.read_text()
+
+    registry_file = output_dir / "registry.json"
+    assert registry_file.exists()
+    registry = json.loads(registry_file.read_text())
+    assert "BuilderWidget" in registry["objects"]
+    widget_entry = registry["objects"]["BuilderWidget"]
+    assert widget_entry["pk_field"] == "widget_id"
+    assert "edits_table" in widget_entry
+    assert "materialized_table" in widget_entry
+    assert widget_entry["properties"] == ["name"]
+    assert widget_entry["methods"] == ["create", "delete", "where"]
 
 
 def test_build_msdk_core_idempotent_on_second_call(tmp_path, db_session):
