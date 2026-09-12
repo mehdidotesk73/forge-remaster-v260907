@@ -6,7 +6,7 @@ _PYPROJECT_TEMPLATE = """[project]
 name = "{repo_name}"
 version = "0.0.0"
 dependencies = [
-    "forge-manifest @ git+https://github.com/mehdidotesk73/forge-remaster-v260907.git@v0.1.0#subdirectory=forge/manifest",
+    "forge-manifest @ git+https://github.com/mehdidotesk73/forge-remaster-v260907.git@v0.2.0#subdirectory=forge/manifest",
 ]
 """
 

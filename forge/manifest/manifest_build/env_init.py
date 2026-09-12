@@ -1,4 +1,4 @@
-# msdk_build/env_init.py
+# forge/manifest/manifest_build/env_init.py
 import subprocess
 from pathlib import Path
 
@@ -7,7 +7,7 @@ def init_environment(repo_dir: str) -> None:
     repo_path = Path(repo_dir)
     venv_python = repo_path / ".venv" / "bin" / "python"
 
-    subprocess.run(["uv", "venv"], cwd=repo_path, check=True)
+    subprocess.run(["uv", "venv", "--clear"], cwd=repo_path, check=True)
 
     subprocess.run(
         [
