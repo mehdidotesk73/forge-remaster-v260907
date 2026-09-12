@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json
 from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -80,3 +81,22 @@ def open_repo(req: OpenRequest) -> OpenResponse:
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return OpenResponse(repo_path=str(repo_path))
+
+
+class RegistryResponse(BaseModel):
+    registry: dict
+
+
+@router.get("/registry", response_model=RegistryResponse)
+def get_registry(repo_dir: str) -> RegistryResponse:
+    repo_path = Path(repo_dir)
+    registry_file = repo_path / "_build" / "registry.json"
+
+    if not registry_file.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"No registry.json found at {registry_file} — has this repo been built yet?",
+        )
+
+    registry_data = json.loads(registry_file.read_text())
+    return RegistryResponse(registry=registry_data)

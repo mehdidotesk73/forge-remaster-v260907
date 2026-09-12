@@ -6,7 +6,10 @@ from forge.manifest.manifest_core import (
 )
 from forge.manifest.manifest_core.registry import ensure_registered
 from forge.manifest.manifest_core.types import STRING, INT, LIST
-from forge.manifest.manifest_build.codegen import generate_module_source
+from forge.manifest.manifest_build.codegen import (
+    generate_module_source,
+    generate_registry_json,
+)
 
 
 def test_generate_and_exec_single_object(db_session):
@@ -132,3 +135,83 @@ def test_generate_with_links(db_session):
     assert "products" in Part._links
     assert Product._links["parts"].join_kind == "array_fk_parent"
     assert Part._links["products"].join_kind == "array_fk_child"
+
+
+def test_generate_registry_json_single_object():
+    product_def = ManifestObjectDef(
+        display_name="Product",
+        api_name="Product",
+        fields={
+            "product_id": ManifestFieldDef(
+                type=STRING, primary_key=True, nullable=False
+            ),
+            "name": ManifestFieldDef(type=STRING, nullable=True),
+            "cost": ManifestFieldDef(type=INT, nullable=True, index=True),
+        },
+    )
+
+    registry_source = generate_registry_json(
+        object_defs=[product_def],
+        link_defs=[],
+        resolved_names={"Product": ("product_edits_x", "product_materialized_x")},
+    )
+
+    import json
+
+    registry = json.loads(registry_source)
+
+    assert "Product" in registry["objects"]
+    entry = registry["objects"]["Product"]
+    assert entry["display_name"] == "Product"
+    assert entry["pk_field"] == "product_id"
+    assert entry["edits_table"] == "product_edits_x"
+    assert entry["materialized_table"] == "product_materialized_x"
+    assert set(entry["properties"]) == {"name", "cost"}
+    assert entry["fields"]["cost"]["type"] == "INT"
+    assert entry["fields"]["cost"]["index"] is True
+    assert entry["methods"] == ["create", "delete", "where"]
+    assert entry["links"] == {}
+
+
+def test_generate_registry_json_with_links():
+    product_def = ManifestObjectDef(
+        display_name="Product",
+        api_name="Product",
+        fields={
+            "product_id": ManifestFieldDef(
+                type=STRING, primary_key=True, nullable=False
+            ),
+            "part_ids": ManifestFieldDef(type=LIST[STRING], nullable=True),
+        },
+    )
+    part_def = ManifestObjectDef(
+        display_name="Part",
+        api_name="Part",
+        fields={
+            "part_id": ManifestFieldDef(type=STRING, primary_key=True, nullable=False)
+        },
+    )
+    link_def = ManifestLinkDef(
+        name="parts",
+        reverse_name="products",
+        source="Product",
+        source_field="part_ids",
+        target="Part",
+        target_field="part_id",
+    )
+
+    registry_source = generate_registry_json(
+        object_defs=[product_def, part_def],
+        link_defs=[link_def],
+        resolved_names={
+            "Product": ("product_edits_x", "product_materialized_x"),
+            "Part": ("part_edits_x", "part_materialized_x"),
+        },
+    )
+
+    import json
+
+    registry = json.loads(registry_source)
+
+    assert registry["objects"]["Product"]["links"]["parts"]["target"] == "Part"
+    assert registry["objects"]["Product"]

@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json
 from forge.manifest.manifest_core import (
     ManifestObjectDef,
     ManifestLinkDef,
@@ -146,3 +147,66 @@ def generate_module_source(
         parts.append(links_block)
 
     return "\n\n\n".join(parts) + "\n"
+
+
+def generate_registry_json(
+    object_defs: list[ManifestObjectDef],
+    link_defs: list[ManifestLinkDef],
+    resolved_names: dict[str, tuple[str, str]],
+) -> str:
+    """
+    Generates a machine-readable description of every declared object:
+    fields, primary key, resolved edits/materialized table names, links
+    (traversal attribute names), and the fixed set of callable methods —
+    for consumption by Terminal, a future GUI, or any tool that needs to
+    introspect a built manifest repo's shape without reading generated
+    source directly.
+
+    NOTE: edits_table/materialized_table are current physical table names.
+    Once the planned Dataset abstraction exists, these should become
+    dataset object rids instead, with the actual table resolved inside
+    the Dataset class — this registry's shape will need a corresponding
+    update at that point (see manifest_design.md §6).
+    """
+    object_defs_by_name = {o.api_name: o for o in object_defs}
+
+    per_object_links: dict[str, dict] = {}
+    for link_def in link_defs:
+        forward_kind, reverse_kind = resolve_link_join_kinds(
+            link_def, object_defs_by_name
+        )
+        per_object_links.setdefault(link_def.source, {})[link_def.name] = {
+            "target": link_def.target,
+            "join_kind": forward_kind,
+        }
+        per_object_links.setdefault(link_def.target, {})[link_def.reverse_name] = {
+            "target": link_def.source,
+            "join_kind": reverse_kind,
+        }
+
+    objects_json = {}
+    for obj_def in object_defs:
+        pk_field = next(name for name, f in obj_def.fields.items() if f.primary_key)
+        properties = [name for name in obj_def.fields if name != pk_field]
+        edits_table, materialized_table = resolved_names[obj_def.api_name]
+
+        objects_json[obj_def.api_name] = {
+            "display_name": obj_def.display_name,
+            "pk_field": pk_field,
+            "edits_table": edits_table,
+            "materialized_table": materialized_table,
+            "fields": {
+                name: {
+                    "type": type_to_source(f.type),
+                    "primary_key": f.primary_key,
+                    "nullable": f.nullable,
+                    "index": f.index,
+                }
+                for name, f in obj_def.fields.items()
+            },
+            "properties": properties,
+            "links": per_object_links.get(obj_def.api_name, {}),
+            "methods": ["create", "delete", "where"],
+        }
+
+    return json.dumps({"objects": objects_json}, indent=2) + "\n"
