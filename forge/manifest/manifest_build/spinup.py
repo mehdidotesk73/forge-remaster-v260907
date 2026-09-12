@@ -1,6 +1,9 @@
 from __future__ import annotations
 import re
 from pathlib import Path
+import tempfile
+
+from .git_ops import clone_repo, commit_and_push
 
 _PYPROJECT_TEMPLATE = """[project]
 name = "{repo_name}"
@@ -141,3 +144,11 @@ def spinup_manifest_repo(target_dir: str) -> Path:
     (build_dir / "__init__.py").write_text(_BUILD_INIT_PLACEHOLDER)
 
     return target
+
+
+def git_spinup_manifest_repo(git_url: str) -> dict:
+    temp_dir = tempfile.mkdtemp(prefix="forge_git_spinup_")
+    repo_path = clone_repo(git_url, str(Path(temp_dir) / "repo"))
+    scaffolded_path = spinup_manifest_repo(str(repo_path))
+    result = commit_and_push(str(scaffolded_path))
+    return {"repo_path": str(scaffolded_path), **result}

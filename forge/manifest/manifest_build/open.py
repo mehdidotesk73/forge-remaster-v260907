@@ -1,7 +1,12 @@
 from __future__ import annotations
+import re
+import shutil
 import subprocess
 from pathlib import Path
+import tempfile
+
 from .env_init import init_environment
+from .git_ops import clone_repo
 
 
 def open_manifest_repo(repo_dir: str, open_editor: bool = True) -> Path:
@@ -31,3 +36,22 @@ def open_manifest_repo(repo_dir: str, open_editor: bool = True) -> Path:
         subprocess.run(args, check=True)
 
     return repo_path
+
+
+def _repo_name_from_url(git_url: str) -> str:
+    # https://github.com/user/test_manifest_repo_git.git -> test_manifest_repo_git
+    name = git_url.rstrip("/").split("/")[-1]
+    return re.sub(r"\.git$", "", name)
+
+
+def git_open_manifest_repo(
+    git_url: str, branch: str = "main", open_editor: bool = True
+) -> dict:
+    repo_name = _repo_name_from_url(git_url)
+    base_temp = Path(tempfile.gettempdir()) / "forge_git_open" / repo_name / branch
+
+    if not base_temp.exists():
+        clone_repo(git_url, str(base_temp), branch=branch)
+
+    opened_path = open_manifest_repo(str(base_temp), open_editor=open_editor)
+    return {"repo_path": str(opened_path)}
