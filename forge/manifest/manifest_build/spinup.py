@@ -3,7 +3,7 @@ import re
 from pathlib import Path
 import tempfile
 
-from .git_ops import clone_repo, commit_and_push
+from forge.adapters.git_adapter import clone_repo, commit_and_push
 
 _PYPROJECT_TEMPLATE = """[project]
 name = "{repo_name}"

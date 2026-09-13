@@ -18,7 +18,7 @@ from forge.manifest.manifest_build.open import (
     open_manifest_repo,
     git_open_manifest_repo,
 )
-from forge.manifest.manifest_build.git_ops import (
+from forge.adapters.git_adapter import (
     clone_repo,
     commit_and_push,
     tag_repo,

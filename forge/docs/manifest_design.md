@@ -115,17 +115,21 @@ forge/
       builder.py                      # build_msdk_within_session (core, session-scoped,
                                        # no commit/rollback) / build_msdk (self-contained
                                        # wrapper) / git_build_manifest_repo (git-aware,
-                                       # composes git_ops — see §4.6)
+                                       # composes forge.adapters.git_adapter — see §4.6)
       spinup.py                        # spinup_manifest_repo (local) / git_spinup_manifest_repo
-                                        # (git-aware, composes git_ops — see §4.6)
+                                        # (git-aware, composes forge.adapters.git_adapter — see §4.6)
       open.py                           # open_manifest_repo (local: venv, deps, Pylance config,
                                          # VS Code launch) / git_open_manifest_repo (git-aware,
                                          # reuse-if-present — see §4.6)
       env_init.py                        # init_environment — uv venv / compile / install
                                           # for a spun-up repo's own isolated environment
-      git_ops.py                          # _run_git, clone_repo, commit_repo, push_repo,
-                                           # commit_and_push, tag_repo — generic git primitives,
-                                           # imports nothing else in this package (see §4.6)
+  adapters/
+    git_adapter.py            # _run_git, clone_repo, commit_repo, push_repo,
+                               # commit_and_push, tag_repo — generic git primitives,
+                               # imports nothing else in Forge (see §4.6). A peer
+                               # layer to manifest_build, not a submodule of it —
+                               # shared ground for any layer (Manifest today,
+                               # Terminal later) that needs generic git operations.
   api/
     main.py                   # FastAPI app, includes each layer's router
     cli.py                      # forge-api CLI entry point (registered via root
@@ -147,15 +151,25 @@ A declaration file only ever needs the top tier. Nothing in
 `forge.manifest` should ever require the coder to know `manifest_core`
 exists.
 
-**A second, orthogonal layering discipline within `manifest_build`
-itself** (established when `git_ops.py` was added): `git_ops.py` is a
-generic primitive layer with zero knowledge of Manifest, spinup, or
-builds — it only knows about git. `spinup.py`, `builder.py`, and `open.py`
-each import `git_ops` and compose its primitives for their own specific
-purpose (`git_spinup_manifest_repo`, `git_build_manifest_repo`,
-`git_open_manifest_repo`). None of these three import each other. This
-keeps the dependency graph flat and one-directional: `git_ops` ← {spinup,
-builder, open}, never the reverse, and never sideways.
+**A second, orthogonal layering discipline that now spans two
+top-level directories** (established when git-backed operations were
+added, then reinforced when the git primitives moved out to
+`forge/adapters/`): `forge/adapters/git_adapter.py` is a generic
+primitive layer with zero knowledge of Manifest, spinup, or builds — it
+only knows about git, and imports nothing else in Forge. It is a peer
+of `forge/manifest/` and `forge/api/`, not a submodule of
+`manifest_build` — the same adapter layer a future Terminal layer could
+import from without going through Manifest at all. Within
+`manifest_build`, `spinup.py`, `builder.py`, and `open.py` each import
+`git_adapter` and compose its primitives for their own specific purpose
+(`git_spinup_manifest_repo`, `git_build_manifest_repo`,
+`git_open_manifest_repo`). None of these three import each other. Those
+composed functions are in turn wrapped by `forge/api/routes/manifest.py`
+into HTTP routes. This keeps the dependency graph flat and
+one-directional in both hops: `git_adapter` ← {spinup, builder, open} ←
+`forge/api`, never the reverse, and never sideways — a caller of the
+Manifest layer never needs, and never gets, direct access to the
+adapter layer itself.
 
 ### 3.1 Two separate `pyproject.toml`s, two separate audiences — a real gotcha found this session
 
@@ -189,6 +203,23 @@ relative imports. Fixed by searching from the true repo root instead.
 Worth remembering as a category of risk whenever packaging config
 changes — it only surfaces once something actually _installs_ the
 package, not when just running tests via `PYTHONPATH`.
+
+**Why `forge.adapters` is not in `forge-manifest`'s `include` list:** a
+spun-up Manifest repo's own code only ever imports
+`forge.manifest.manifest_core` at runtime (see the import layering
+table above) — never `forge.adapters.git_adapter` directly. Within
+`manifest_build`, `spinup.py`/`builder.py`/`open.py` compose the
+adapter's primitives internally (§4.6), but that's build-time tooling,
+not something the standalone install needs to expose. `forge/api` is
+different: `forge/api/routes/manifest.py` imports
+`forge.adapters.git_adapter` directly too, for three routes
+(`/clone`, `/git-commit`, `/tag`) that expose raw adapter primitives
+as their own endpoints rather than going through a `manifest_build`
+wrapper — so unlike a Manifest-repo consumer, `forge/api` genuinely is
+a second, independent caller of the adapter layer, not just a
+downstream consumer of Manifest. That's covered by the root
+`forge/pyproject.toml` install instead (`include = ["forge",
+"forge.*"]`), which already reaches `forge.adapters`.
 
 ---
 
@@ -380,7 +411,15 @@ requirements-lock.txt --python <venv>/bin/python`.
   Fixed by always passing `--python <repo_dir>/.venv/bin/python`
   explicitly.
 
-### 4.6 `git_ops.py` — generic git primitives, and the git-aware composition layer
+### 4.6 `forge/adapters/git_adapter.py` — generic git primitives, and the git-aware composition layer
+
+**Location:** `git_adapter.py` lives in `forge/adapters/`, a peer
+directory to `forge/manifest/` and `forge/api/` (see §3) — not inside
+`manifest_build`. It started out as `manifest_build/git_ops.py` and was
+pulled out once it became clear the primitives here have nothing
+Manifest-specific about them: any future layer (Terminal, say) that
+needs generic git operations can import `forge.adapters.git_adapter`
+directly, without going through Manifest.
 
 **Scope decision:** for now, Forge only clones/operates on **already-
 existing** remote repos the user provides a URL for — it does not create
@@ -441,7 +480,11 @@ one "publish with optional tag" function — tagging is a distinct action
 with its own intent, not a mode of committing.
 
 **The composed, domain-specific functions** (living in `spinup.py`/
-`builder.py`/`open.py`, each importing only `git_ops`, never each other):
+`builder.py`/`open.py` in `manifest_build`, each importing only
+`forge.adapters.git_adapter`, never each other, and never re-exposing
+the adapter layer itself to their own callers — the caller of Manifest
+gets `git_spinup_manifest_repo` etc., wrapped again by
+`forge/api/routes/manifest.py`, not adapter-level access):
 
 - **`git_spinup_manifest_repo(git_url)`** (in `spinup.py`) — clones to a
   temp directory, scaffolds it via `spinup_manifest_repo`, commits and

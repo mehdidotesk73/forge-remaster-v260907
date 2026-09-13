@@ -16,7 +16,7 @@ from .codegen import (
     generate_build_init_source,
     generate_registry_json,
 )
-from .git_ops import clone_repo, commit_and_push, tag_repo
+from forge.adapters.git_adapter import clone_repo, commit_and_push, tag_repo
 
 
 def _resolve_table_names(api_name: str, session: Session) -> tuple[str, str, str]:
