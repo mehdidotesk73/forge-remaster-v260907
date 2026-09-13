@@ -215,3 +215,59 @@ def test_generate_registry_json_with_links():
 
     assert registry["objects"]["Product"]["links"]["parts"]["target"] == "Part"
     assert registry["objects"]["Product"]
+
+
+def test_generate_registry_json_field_display_name_fallback():
+    product_def = ManifestObjectDef(
+        display_name="Product",
+        api_name="Product",
+        fields={
+            "product_id": ManifestFieldDef(
+                type=STRING, primary_key=True, nullable=False
+            ),
+            "name": ManifestFieldDef(type=STRING, nullable=True),
+        },
+    )
+
+    registry_source = generate_registry_json(
+        object_defs=[product_def],
+        link_defs=[],
+        resolved_names={"Product": ("product_edits_x", "product_materialized_x")},
+    )
+
+    import json
+
+    registry = json.loads(registry_source)
+    entry = registry["objects"]["Product"]
+
+    assert entry["fields"]["product_id"]["display_name"] == "product_id"
+    assert entry["fields"]["name"]["display_name"] == "name"
+
+
+def test_generate_registry_json_field_display_name_explicit():
+    product_def = ManifestObjectDef(
+        display_name="Product",
+        api_name="Product",
+        fields={
+            "product_id": ManifestFieldDef(
+                type=STRING, primary_key=True, nullable=False
+            ),
+            "name": ManifestFieldDef(
+                type=STRING, nullable=True, display_name="Product Name"
+            ),
+        },
+    )
+
+    registry_source = generate_registry_json(
+        object_defs=[product_def],
+        link_defs=[],
+        resolved_names={"Product": ("product_edits_x", "product_materialized_x")},
+    )
+
+    import json
+
+    registry = json.loads(registry_source)
+    entry = registry["objects"]["Product"]
+
+    assert entry["fields"]["name"]["display_name"] == "Product Name"
+    assert entry["fields"]["product_id"]["display_name"] == "product_id"

@@ -229,8 +229,12 @@ field's dict key in `fields={...}` is its **code-facing name**, and is
 also, by convention, its backing database column name — code always
 addresses a field by this one name. A separate, purely presentational
 `display_name` per field (mirroring `ManifestObjectDef`'s existing
-`display_name`/`api_name` split) is planned but not yet implemented on
-`ManifestFieldDef`/`ManifestField` — see §7.
+`display_name`/`api_name` split) exists on `ManifestFieldDef` as an
+optional `str | None` parameter, defaulting to `None`. It is consumed
+only at codegen time, when writing `registry.json`'s field entries
+(§4.4/§4.7): a field's `display_name` falls back to its dict key when
+left `None`. It has no effect on the generated `ManifestField`
+descriptor or runtime behavior — purely a presentational export.
 
 ### 4.3 `base.py` — runtime object machinery
 
@@ -246,6 +250,18 @@ materialized column expression, so `Product.cost < 100` reads naturally in
 == "x"` does **not** work in `.where()`. To query/construct by pk, use
 `Product("some_pk")` directly plus a field access to force the existence
 check.
+
+`_pk_field`, `_properties`, and `_nullable_map` are **derived, not
+separately emitted**. Codegen sets a single `_field_defs` class attribute
+(the same `_fields_{api_name}` dict already needed to build the
+SQLAlchemy mapped classes) on each generated `ManifestObject` subclass;
+`ManifestObject.__init_subclass__` reads it at class-creation time and
+computes the three from it. This removed a prior redundancy where
+codegen emitted `_pk_field`/`_properties`/`_nullable_map` as separate
+literals alongside the field-def dict they were always derivable from.
+`__init_subclass__` guards with `vars(cls).get("_field_defs")` so that
+`ManifestObject` itself (which has no `_field_defs`) doesn't attempt the
+derivation.
 
 **`ManifestObject`** — thin, pk-only wrapper. `create()` permanently
 retires a pk once deleted — a deleted pk can never be recreated with the
@@ -606,8 +622,7 @@ import-hook mechanism, invisible to Pylance's purely static analysis —
 correctly-installed, fully working code appears as an unresolvable import
 in the editor. Fixed with `--config-settings editable_mode=compat`
 (the older `.pth`-file-based mechanism, a plain path addition Pylance can
-see). Baked into `init_workspace.py`'s live-mode install and
-`scripts/mount_repo.sh`.
+see). Baked into `init_workspace.py`'s live-mode install.
 
 **A second, related gotcha:** VS Code's `python.defaultInterpreterPath`
 does not reliably resolve the `${workspaceFolder}` variable in all
@@ -625,12 +640,16 @@ session and are pure local-environment quirks, not Forge bugs — worth
 checking `which python`/`which pytest` and the actual resolved path
 whenever behavior seems inexplicably wrong.
 
-`scripts/mount_repo.sh` (Forge repo root) is the general-purpose,
-bash-CLI version of the same "set up venv, install deps, configure
-Pylance, open VS Code" pattern that `open_manifest_repo` now also
-provides as a real, reusable Python function — worth eventually having
-`mount_repo.sh` call into that function rather than duplicating the logic
-in bash, though this consolidation hasn't been done yet (see §7).
+**`scripts/mount_repo.sh` has been deleted outright, not consolidated.**
+It was a bash-CLI version of the same "set up venv, install deps,
+configure Pylance, open VS Code" pattern that `open_manifest_repo`/
+`git_open_manifest_repo` (§4.5) already provide as real, tested Python
+functions — and a strict superset: they also handle git-clone-into-
+deterministic-temp-path, reuse-if-present, and combined-call VS Code
+launch with README/example-file targeting, none of which the bash
+script did. Once it was clear the API surface fully replaced it, there
+was no reason to keep it around to consolidate — it was removed
+entirely rather than rewritten to call into `open_manifest_repo`.
 
 ---
 
@@ -671,21 +690,6 @@ spinup/open/build), the `registry.json` export, and the Forge API service
 complete — see §4 and §5 above. What remains, in the currently intended
 order:
 
-- **`ManifestFieldDef`/`ManifestField` display names** — a field's dict
-  key in `fields={...}` should remain the code-facing/column name
-  (unchanged), but `ManifestFieldDef` should gain a `display_name`
-  parameter (mirroring `ManifestObjectDef`'s existing `api_name`/
-  `display_name` split) for future UI use. Requires updates to
-  `ManifestFieldDef`, `ManifestField`, codegen's field-emission logic, and
-  `registry.json`'s field entries. Planned to land in the same branch as
-  the codegen redundancy cleanup below, since both touch the same code.
-- **The `_properties`/`_nullable_map`/`_pk_field` redundancy with
-  `ManifestField` declarations** — codegen currently emits this
-  information twice. A cleaner design would derive them from the
-  `ManifestField` descriptors themselves at class-creation time (e.g. via
-  `__init_subclass__`), collapsing the redundancy. Now that the full
-  spinup → declare → build → import → git → API pipeline is proven
-  end-to-end, this refactor has a working test suite as a safety net.
 - **A manual materialize/refresh helper** — a function taking a list of
   object identifiers and running `REFRESH MATERIALIZED VIEW CONCURRENTLY`
   for each. Planned to accept a list and process each object as one
@@ -700,9 +704,6 @@ order:
   relaxation and additive nullable fields auto-apply; type changes, field
   removal, and nullable tightening are breaking and require explicit
   migration) is designed in principle but not implemented.
-- **Consolidating `scripts/mount_repo.sh` to call `open_manifest_repo`
-  directly** rather than duplicating its logic in bash, now that the
-  latter exists as a real, tested Python function.
 - **Creating new remote repositories via GitHub's API** — current git
   scope only clones/operates on already-existing remotes; a user must
   create the empty repo themselves before Forge can spin it up.
