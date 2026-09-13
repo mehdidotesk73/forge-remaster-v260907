@@ -11,12 +11,14 @@ class ManifestFieldDef:
         primary_key: bool = False,
         nullable: bool = True,
         index: bool = False,
+        display_name: str | None = None,
         backing_column: Optional[str] = None,
     ):
         self.type = type
         self.primary_key = primary_key
         self.nullable = nullable
         self.index = index
+        self.display_name = display_name
         self.backing_column = backing_column
 
     def __repr__(self):

@@ -72,6 +72,19 @@ class ManifestObject:
     def __init__(self, pk):
         self.pk = pk
 
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        field_defs = vars(cls).get("_field_defs")
+        if field_defs is None:
+            return
+        cls._pk_field = next(name for name, f in field_defs.items() if f.primary_key)
+        cls._properties = tuple(
+            name for name, f in field_defs.items() if not f.primary_key
+        )
+        cls._nullable_map = {
+            name: f.nullable for name, f in field_defs.items() if not f.primary_key
+        }
+
     def __eq__(self, other):
         return isinstance(other, self.__class__) and self.pk == other.pk
 

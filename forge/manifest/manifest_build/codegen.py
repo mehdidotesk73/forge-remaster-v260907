@@ -26,11 +26,9 @@ def generate_object_source(
     obj_def: ManifestObjectDef, edits_table: str, materialized_table: str
 ) -> str:
     api_name = obj_def.api_name
-    pk_field = next(name for name, f in obj_def.fields.items() if f.primary_key)
     properties = tuple(
         name for name in obj_def.fields if not obj_def.fields[name].primary_key
     )
-    nullable_map = {name: obj_def.fields[name].nullable for name in properties}
 
     field_props = "\n".join(
         f'    {name} = ManifestField("{name}")' for name in properties
@@ -51,9 +49,7 @@ _materialized_cls_{api_name} = _make_mapped_class(
 class {api_name}(ManifestObject):
     _edit_cls = _edit_cls_{api_name}
     _materialized_cls = _materialized_cls_{api_name}
-    _pk_field = "{pk_field}"
-    _properties = {properties!r}
-    _nullable_map = {nullable_map!r}
+    _field_defs = _fields_{api_name}
 
 {field_props}
 
@@ -201,6 +197,9 @@ def generate_registry_json(
                     "primary_key": f.primary_key,
                     "nullable": f.nullable,
                     "index": f.index,
+                    "display_name": (
+                        f.display_name if f.display_name is not None else name
+                    ),
                 }
                 for name, f in obj_def.fields.items()
             },
