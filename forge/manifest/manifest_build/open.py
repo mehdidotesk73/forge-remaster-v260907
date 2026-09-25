@@ -6,7 +6,7 @@ from pathlib import Path
 import tempfile
 
 from .env_init import init_environment
-from .git_ops import clone_repo
+from forge.adapters.git_adapter import clone_repo
 
 
 def open_manifest_repo(repo_dir: str, open_editor: bool = True) -> Path:

@@ -102,7 +102,8 @@ forge/
       defs.py                     # ManifestFieldDef/ManifestObjectDef/ManifestLinkDef,
                                    # DeclarationCollector/bind_collector
       base.py                      # ManifestField, ManifestObject, ManifestObjectSet,
-                                    # ManifestLink, current_session/_require_session
+                                    # ManifestLink — session access via
+                                    # forge.adapters.db_adapter.require_session()
       registry.py                   # ObjectRegistry, ensure_registry_table,
                                      # ensure_registered, _make_mapped_class
     manifest_build/
@@ -115,17 +116,27 @@ forge/
       builder.py                      # build_msdk_within_session (core, session-scoped,
                                        # no commit/rollback) / build_msdk (self-contained
                                        # wrapper) / git_build_manifest_repo (git-aware,
-                                       # composes git_ops — see §4.6)
+                                       # composes forge.adapters.git_adapter — see §4.6)
       spinup.py                        # spinup_manifest_repo (local) / git_spinup_manifest_repo
-                                        # (git-aware, composes git_ops — see §4.6)
+                                        # (git-aware, composes forge.adapters.git_adapter — see §4.6)
       open.py                           # open_manifest_repo (local: venv, deps, Pylance config,
                                          # VS Code launch) / git_open_manifest_repo (git-aware,
                                          # reuse-if-present — see §4.6)
       env_init.py                        # init_environment — uv venv / compile / install
                                           # for a spun-up repo's own isolated environment
-      git_ops.py                          # _run_git, clone_repo, commit_repo, push_repo,
-                                           # commit_and_push, tag_repo — generic git primitives,
-                                           # imports nothing else in this package (see §4.6)
+  adapters/
+    git_adapter.py            # _run_git, clone_repo, commit_repo, push_repo,
+                               # commit_and_push, tag_repo — generic git primitives,
+                               # imports nothing else in Forge (see §4.6). A peer
+                               # layer to manifest_build, not a submodule of it —
+                               # shared ground for any layer (Manifest today,
+                               # Terminal later) that needs generic git operations.
+    db_adapter.py              # current_session (ContextVar[Session]),
+                                # NoActiveSessionError, require_session(),
+                                # use_session(), unit_of_work(engine) — session
+                                # lifecycle/context plumbing, imports nothing else
+                                # in Forge (see §4.3). Consumed directly by
+                                # manifest_core/base.py, not manifest_build.
   api/
     main.py                   # FastAPI app, includes each layer's router
     cli.py                      # forge-api CLI entry point (registered via root
@@ -147,15 +158,39 @@ A declaration file only ever needs the top tier. Nothing in
 `forge.manifest` should ever require the coder to know `manifest_core`
 exists.
 
-**A second, orthogonal layering discipline within `manifest_build`
-itself** (established when `git_ops.py` was added): `git_ops.py` is a
-generic primitive layer with zero knowledge of Manifest, spinup, or
-builds — it only knows about git. `spinup.py`, `builder.py`, and `open.py`
-each import `git_ops` and compose its primitives for their own specific
-purpose (`git_spinup_manifest_repo`, `git_build_manifest_repo`,
-`git_open_manifest_repo`). None of these three import each other. This
-keeps the dependency graph flat and one-directional: `git_ops` ← {spinup,
-builder, open}, never the reverse, and never sideways.
+**A second, orthogonal layering discipline that now spans two
+top-level directories** (established when git-backed operations were
+added, then reinforced when the git primitives moved out to
+`forge/adapters/`): `forge/adapters/git_adapter.py` is a generic
+primitive layer with zero knowledge of Manifest, spinup, or builds — it
+only knows about git, and imports nothing else in Forge. It is a peer
+of `forge/manifest/` and `forge/api/`, not a submodule of
+`manifest_build` — the same adapter layer a future Terminal layer could
+import from without going through Manifest at all. Within
+`manifest_build`, `spinup.py`, `builder.py`, and `open.py` each import
+`git_adapter` and compose its primitives for their own specific purpose
+(`git_spinup_manifest_repo`, `git_build_manifest_repo`,
+`git_open_manifest_repo`). None of these three import each other. Those
+composed functions are in turn wrapped by `forge/api/routes/manifest.py`
+into HTTP routes. This keeps the dependency graph flat and
+one-directional in both hops: `git_adapter` ← {spinup, builder, open} ←
+`forge/api`, never the reverse, and never sideways — a caller of the
+Manifest layer never needs, and never gets, direct access to the
+adapter layer itself.
+
+`forge/adapters/db_adapter.py` is a peer file within the same
+`adapters/` directory, but shaped differently: `base.py` — the runtime
+object machinery itself, not a `manifest_build` composition function —
+imports `require_session()` directly (see §4.3), since every
+`ManifestField`/`ManifestObject`/`ManifestObjectSet` operation needs a
+session in scope at the point of the call. `db_adapter.py` still
+imports nothing else in Forge; the dependency only runs one direction,
+`db_adapter` ← `manifest_core.base`. Session lifecycle itself is owned
+by whichever caller opens the unit of work — `build_msdk`'s own
+`Session(engine)`/`session.begin()` today, `unit_of_work(engine)` for
+any caller that wants that opened/committed/rolled-back/closed sequence
+handled for it — `db_adapter.py` supplies both the contextvar plumbing
+and that ready-made wrapper, but does not decide when a session opens.
 
 ### 3.1 Two separate `pyproject.toml`s, two separate audiences — a real gotcha found this session
 
@@ -189,6 +224,23 @@ relative imports. Fixed by searching from the true repo root instead.
 Worth remembering as a category of risk whenever packaging config
 changes — it only surfaces once something actually _installs_ the
 package, not when just running tests via `PYTHONPATH`.
+
+**Why `forge.adapters` is not in `forge-manifest`'s `include` list:** a
+spun-up Manifest repo's own code only ever imports
+`forge.manifest.manifest_core` at runtime (see the import layering
+table above) — never `forge.adapters.git_adapter` directly. Within
+`manifest_build`, `spinup.py`/`builder.py`/`open.py` compose the
+adapter's primitives internally (§4.6), but that's build-time tooling,
+not something the standalone install needs to expose. `forge/api` is
+different: `forge/api/routes/manifest.py` imports
+`forge.adapters.git_adapter` directly too, for three routes
+(`/clone`, `/git-commit`, `/tag`) that expose raw adapter primitives
+as their own endpoints rather than going through a `manifest_build`
+wrapper — so unlike a Manifest-repo consumer, `forge/api` genuinely is
+a second, independent caller of the adapter layer, not just a
+downstream consumer of Manifest. That's covered by the root
+`forge/pyproject.toml` install instead (`include = ["forge",
+"forge.*"]`), which already reaches `forge.adapters`.
 
 ---
 
@@ -266,6 +318,19 @@ derivation.
 **`ManifestObject`** — thin, pk-only wrapper. `create()` permanently
 retires a pk once deleted — a deleted pk can never be recreated with the
 same identity. `__eq__`/`__hash__` are pk-based.
+
+**Session handling.** `base.py` owns no session lifecycle of its own.
+Every method that touches the database — `_get_field`, `_set_field`,
+`create`, `delete`, `ManifestObjectSet.__iter__`, `.first()` — starts by
+calling `forge.adapters.db_adapter.require_session()` (see §4.6) to fetch
+whatever session is currently published on `db_adapter.current_session`.
+If none is (i.e. the call happens outside a `unit_of_work()`/`use_session()`
+block), `require_session()` raises `NoActiveSessionError` rather than
+silently opening one — `base.py` has no `Engine` reference and no opinion
+about transaction boundaries; opening, committing, and closing sessions is
+entirely the caller's responsibility (today, `build_msdk()`'s own
+`Session(engine)`/`session.begin()` — migrating it to `unit_of_work()` is a
+deferred question, not yet decided).
 
 Confirmed via `e2e-harness`: since deletes are soft and a pk is
 permanently retired once touched, a repeatable test script should
@@ -380,7 +445,15 @@ requirements-lock.txt --python <venv>/bin/python`.
   Fixed by always passing `--python <repo_dir>/.venv/bin/python`
   explicitly.
 
-### 4.6 `git_ops.py` — generic git primitives, and the git-aware composition layer
+### 4.6 `forge/adapters/git_adapter.py` — generic git primitives, and the git-aware composition layer
+
+**Location:** `git_adapter.py` lives in `forge/adapters/`, a peer
+directory to `forge/manifest/` and `forge/api/` (see §3) — not inside
+`manifest_build`. It started out as `manifest_build/git_ops.py` and was
+pulled out once it became clear the primitives here have nothing
+Manifest-specific about them: any future layer (Terminal, say) that
+needs generic git operations can import `forge.adapters.git_adapter`
+directly, without going through Manifest.
 
 **Scope decision:** for now, Forge only clones/operates on **already-
 existing** remote repos the user provides a URL for — it does not create
@@ -441,7 +514,11 @@ one "publish with optional tag" function — tagging is a distinct action
 with its own intent, not a mode of committing.
 
 **The composed, domain-specific functions** (living in `spinup.py`/
-`builder.py`/`open.py`, each importing only `git_ops`, never each other):
+`builder.py`/`open.py` in `manifest_build`, each importing only
+`forge.adapters.git_adapter`, never each other, and never re-exposing
+the adapter layer itself to their own callers — the caller of Manifest
+gets `git_spinup_manifest_repo` etc., wrapped again by
+`forge/api/routes/manifest.py`, not adapter-level access):
 
 - **`git_spinup_manifest_repo(git_url)`** (in `spinup.py`) — clones to a
   temp directory, scaffolds it via `spinup_manifest_repo`, commits and
@@ -576,6 +653,21 @@ that have no SQLite equivalent.
   `Base.metadata` and clears `_registered_classes` via a shared
   `reset_registered_classes()` helper (also callable mid-test, for tests
   that deliberately simulate "a fresh process" partway through).
+- `tests/api/` is a pytest counterpart to `forge-api-e2e-testing/` (§5.1),
+  in-process rather than a standalone harness: `test_manifest_api.py`
+  drives the FastAPI routes (`/manifest/spinup`, `/manifest/open`,
+  `/manifest/build`, `/manifest/registry`) through `TestClient(app)`,
+  covering both the success path and the 404/409 error responses for
+  each. Its `conftest.py` adds two autouse fixtures on top of the shared
+  `engine`/`db_session` ones above: `_use_test_db` monkeypatches
+  `forge.api.routes.manifest.DB_URL` to point the routes at the test
+  database, and `_cleanup_built_registrations` tears down whatever
+  `/manifest/build` committed (registry row, generated table, generated
+  materialized view) after each test — necessary because `/manifest/build`
+  runs through its own standalone session (`build_msdk()`'s self-managed
+  `Session(engine)`/`session.begin()`, per §4.3), not the `db_session`
+  fixture's rolled-back one, so its writes are real commits that outlive
+  a single test unless cleaned up explicitly.
 
 ### 5.1 `e2e-harness` — a second, complementary layer of testing (renamed and restructured this session)
 
