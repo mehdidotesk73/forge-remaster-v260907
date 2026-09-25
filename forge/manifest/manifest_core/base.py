@@ -1,25 +1,11 @@
 from __future__ import annotations
-import contextvars
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
 
-current_session: contextvars.ContextVar[Session] = contextvars.ContextVar(
-    "current_session"
+from forge.adapters.db_adapter import (
+    current_session,
+    NoActiveSessionError,
+    require_session,
 )
-
-
-class NoActiveSessionError(Exception):
-    pass
-
-
-def _require_session() -> Session:
-    try:
-        return current_session.get()
-    except LookupError:
-        raise NoActiveSessionError(
-            "No active session in context. This must be called from within a "
-            "unit-of-work decorated function."
-        )
 
 
 class ManifestField:
@@ -112,7 +98,7 @@ class ManifestObject:
         return cls._nullable_map[name]
 
     def _get_field(self, name):
-        session = _require_session()
+        session = require_session()
         edit_row = session.get(self._edit_cls, self.pk)
         if edit_row is not None:
             if edit_row._deleted:
@@ -128,7 +114,7 @@ class ManifestObject:
         return getattr(mat_row, name)
 
     def _set_field(self, name, value):
-        session = _require_session()
+        session = require_session()
         edit_row = session.get(self._edit_cls, self.pk)
         if edit_row is not None:
             if edit_row._deleted:
@@ -149,7 +135,7 @@ class ManifestObject:
 
     @classmethod
     def create(cls, pk, **initial_values):
-        session = _require_session()
+        session = require_session()
         edit_row = session.get(cls._edit_cls, pk)
         if edit_row is not None:
             raise ValueError(
@@ -174,7 +160,7 @@ class ManifestObject:
         return cls(pk=pk)
 
     def delete(self):
-        session = _require_session()
+        session = require_session()
         edit_row = session.get(self._edit_cls, self.pk)
         if edit_row is None:
             mat_row = session.get(self._materialized_cls, self.pk)
@@ -196,7 +182,7 @@ class ManifestObjectSet:
         self._stmt = stmt
 
     def __iter__(self):
-        session = _require_session()
+        session = require_session()
         for row in session.execute(self._stmt).scalars():
             yield self._element_cls._wrap(row)
 
@@ -204,7 +190,7 @@ class ManifestObjectSet:
         return list(self)
 
     def first(self):
-        session = _require_session()
+        session = require_session()
         row = session.execute(self._stmt.limit(1)).scalars().first()
         return self._element_cls._wrap(row) if row else None
 

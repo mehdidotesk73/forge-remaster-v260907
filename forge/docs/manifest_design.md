@@ -102,7 +102,8 @@ forge/
       defs.py                     # ManifestFieldDef/ManifestObjectDef/ManifestLinkDef,
                                    # DeclarationCollector/bind_collector
       base.py                      # ManifestField, ManifestObject, ManifestObjectSet,
-                                    # ManifestLink, current_session/_require_session
+                                    # ManifestLink — session access via
+                                    # forge.adapters.db_adapter.require_session()
       registry.py                   # ObjectRegistry, ensure_registry_table,
                                      # ensure_registered, _make_mapped_class
     manifest_build/
@@ -130,6 +131,12 @@ forge/
                                # layer to manifest_build, not a submodule of it —
                                # shared ground for any layer (Manifest today,
                                # Terminal later) that needs generic git operations.
+    db_adapter.py              # current_session (ContextVar[Session]),
+                                # NoActiveSessionError, require_session(),
+                                # use_session(), unit_of_work(engine) — session
+                                # lifecycle/context plumbing, imports nothing else
+                                # in Forge (see §4.3). Consumed directly by
+                                # manifest_core/base.py, not manifest_build.
   api/
     main.py                   # FastAPI app, includes each layer's router
     cli.py                      # forge-api CLI entry point (registered via root
@@ -170,6 +177,20 @@ one-directional in both hops: `git_adapter` ← {spinup, builder, open} ←
 `forge/api`, never the reverse, and never sideways — a caller of the
 Manifest layer never needs, and never gets, direct access to the
 adapter layer itself.
+
+`forge/adapters/db_adapter.py` is a peer file within the same
+`adapters/` directory, but shaped differently: `base.py` — the runtime
+object machinery itself, not a `manifest_build` composition function —
+imports `require_session()` directly (see §4.3), since every
+`ManifestField`/`ManifestObject`/`ManifestObjectSet` operation needs a
+session in scope at the point of the call. `db_adapter.py` still
+imports nothing else in Forge; the dependency only runs one direction,
+`db_adapter` ← `manifest_core.base`. Session lifecycle itself is owned
+by whichever caller opens the unit of work — `build_msdk`'s own
+`Session(engine)`/`session.begin()` today, `unit_of_work(engine)` for
+any caller that wants that opened/committed/rolled-back/closed sequence
+handled for it — `db_adapter.py` supplies both the contextvar plumbing
+and that ready-made wrapper, but does not decide when a session opens.
 
 ### 3.1 Two separate `pyproject.toml`s, two separate audiences — a real gotcha found this session
 
@@ -297,6 +318,19 @@ derivation.
 **`ManifestObject`** — thin, pk-only wrapper. `create()` permanently
 retires a pk once deleted — a deleted pk can never be recreated with the
 same identity. `__eq__`/`__hash__` are pk-based.
+
+**Session handling.** `base.py` owns no session lifecycle of its own.
+Every method that touches the database — `_get_field`, `_set_field`,
+`create`, `delete`, `ManifestObjectSet.__iter__`, `.first()` — starts by
+calling `forge.adapters.db_adapter.require_session()` (see §4.6) to fetch
+whatever session is currently published on `db_adapter.current_session`.
+If none is (i.e. the call happens outside a `unit_of_work()`/`use_session()`
+block), `require_session()` raises `NoActiveSessionError` rather than
+silently opening one — `base.py` has no `Engine` reference and no opinion
+about transaction boundaries; opening, committing, and closing sessions is
+entirely the caller's responsibility (today, `build_msdk()`'s own
+`Session(engine)`/`session.begin()` — migrating it to `unit_of_work()` is a
+deferred question, not yet decided).
 
 Confirmed via `e2e-harness`: since deletes are soft and a pk is
 permanently retired once touched, a repeatable test script should
@@ -619,6 +653,21 @@ that have no SQLite equivalent.
   `Base.metadata` and clears `_registered_classes` via a shared
   `reset_registered_classes()` helper (also callable mid-test, for tests
   that deliberately simulate "a fresh process" partway through).
+- `tests/api/` is a pytest counterpart to `forge-api-e2e-testing/` (§5.1),
+  in-process rather than a standalone harness: `test_manifest_api.py`
+  drives the FastAPI routes (`/manifest/spinup`, `/manifest/open`,
+  `/manifest/build`, `/manifest/registry`) through `TestClient(app)`,
+  covering both the success path and the 404/409 error responses for
+  each. Its `conftest.py` adds two autouse fixtures on top of the shared
+  `engine`/`db_session` ones above: `_use_test_db` monkeypatches
+  `forge.api.routes.manifest.DB_URL` to point the routes at the test
+  database, and `_cleanup_built_registrations` tears down whatever
+  `/manifest/build` committed (registry row, generated table, generated
+  materialized view) after each test — necessary because `/manifest/build`
+  runs through its own standalone session (`build_msdk()`'s self-managed
+  `Session(engine)`/`session.begin()`, per §4.3), not the `db_session`
+  fixture's rolled-back one, so its writes are real commits that outlive
+  a single test unless cleaned up explicitly.
 
 ### 5.1 `e2e-harness` — a second, complementary layer of testing (renamed and restructured this session)
 
